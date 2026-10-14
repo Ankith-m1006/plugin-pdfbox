@@ -109,7 +109,7 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
                 runContext.logger().warn("Skipped {} images larger than {} pixels.", skipped, pixelLimit);
             }
         }
-        runContext.logger().info("Extracted {} images.", uris.size());
+        runContext.logger().info("Extracted {} image(s).", uris.size());
         return Output.builder().uris(uris).count(uris.size()).build();
     }
 

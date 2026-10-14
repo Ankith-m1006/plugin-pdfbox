@@ -91,7 +91,7 @@ public class Merge extends AbstractPdfboxTask implements RunnableTask<Merge.Outp
             pageCount = merged.getNumberOfPages();
         }
         URI uri = runContext.storage().putFile(target.toFile());
-        runContext.logger().info("Merged {} PDFs into {} pages.", uris.size(), pageCount);
+        runContext.logger().info("Merged {} PDFs into {} page(s).", uris.size(), pageCount);
         return Output.builder().uri(uri).pageCount(pageCount).build();
     }
 

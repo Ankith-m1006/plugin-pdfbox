@@ -125,7 +125,7 @@ public class Render extends AbstractPdfboxTask implements RunnableTask<Render.Ou
                 uris.add(runContext.storage().putFile(file.toFile()));
             }
         }
-        runContext.logger().info("Rendered {} pages at {} DPI.", uris.size(), resolution);
+        runContext.logger().info("Rendered {} page(s) at {} DPI.", uris.size(), resolution);
         return Output.builder().uris(uris).count(uris.size()).build();
     }
 

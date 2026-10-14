@@ -118,7 +118,7 @@ public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Outp
                     uris.add(save(runContext, output));
                 }
             }
-            runContext.logger().info("Split {} pages into {} PDFs.", pageCount, uris.size());
+            runContext.logger().info("Split {} page(s) into {} PDF(s).", pageCount, uris.size());
         }
         return Output.builder().uris(uris).count(uris.size()).build();
     }
