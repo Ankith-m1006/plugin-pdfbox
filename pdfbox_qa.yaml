@@ -1,0 +1,134 @@
+id: pdfbox_qa
+namespace: company.team
+description: End-to-end QA of every task in plugin-pdfbox, on real files.
+
+inputs:
+  - id: form
+    type: FILE
+    description: An AcroForm PDF with full_name, start_date and a remote check box
+  - id: logo
+    type: FILE
+    description: A PNG logo
+
+tasks:
+  - id: html_to_pdf
+    type: io.kestra.plugin.pdfbox.document.FromHtml
+    pageSize: A4
+    html: |
+      <html>
+        <head><style>@page { margin: 20mm } body { font-family: sans-serif } td { padding: 4px 12px }</style></head>
+        <body>
+          <img src="{{ inputs.logo }}" width="120"/>
+          <h1>Invoice INV-2026-0042</h1>
+          <p>Bill to: Acme Retail Pvt Ltd</p>
+          <table>
+            <tr><td>Widgets</td><td>12</td><td>4,800.00</td></tr>
+            <tr><td>Gadgets</td><td>3</td><td>2,250.00</td></tr>
+          </table>
+          <p>Total due: INR 7,050.00</p>
+          <p>Execution {{ execution.id }}</p>
+        </body>
+      </html>
+
+  - id: extract_text
+    type: io.kestra.plugin.pdfbox.text.Extract
+    from: "{{ outputs.html_to_pdf.uri }}"
+    perPage: true
+
+  - id: set_metadata
+    type: io.kestra.plugin.pdfbox.metadata.Update
+    from: "{{ outputs.html_to_pdf.uri }}"
+    title: Invoice INV-2026-0042
+    author: Finance team
+    keywords: invoice, qa
+    custom:
+      executionId: "{{ execution.id }}"
+
+  - id: read_metadata
+    type: io.kestra.plugin.pdfbox.metadata.Read
+    from: "{{ outputs.set_metadata.uri }}"
+
+  - id: render_pages
+    type: io.kestra.plugin.pdfbox.image.Render
+    from: "{{ outputs.set_metadata.uri }}"
+    dpi: 100
+
+  - id: images_to_pdf
+    type: io.kestra.plugin.pdfbox.document.FromImages
+    images: "{{ outputs.render_pages.uris }}"
+    pageSize: LETTER
+    margin: 36
+
+  - id: merge
+    type: io.kestra.plugin.pdfbox.document.Merge
+    files:
+      - "{{ outputs.set_metadata.uri }}"
+      - "{{ outputs.images_to_pdf.uri }}"
+
+  - id: split
+    type: io.kestra.plugin.pdfbox.document.Split
+    from: "{{ outputs.merge.uri }}"
+    everyNPages: 1
+
+  - id: extract_images
+    type: io.kestra.plugin.pdfbox.image.Extract
+    from: "{{ outputs.html_to_pdf.uri }}"
+
+  - id: encrypt
+    type: io.kestra.plugin.pdfbox.security.Encrypt
+    from: "{{ outputs.merge.uri }}"
+    userPassword: qa-user-pass
+    ownerPassword: qa-owner-pass
+    canPrint: true
+    canCopy: false
+
+  - id: read_encrypted
+    type: io.kestra.plugin.pdfbox.text.Extract
+    from: "{{ outputs.encrypt.uri }}"
+    password: qa-user-pass
+    endPage: 1
+
+  - id: decrypt
+    type: io.kestra.plugin.pdfbox.security.Decrypt
+    from: "{{ outputs.encrypt.uri }}"
+    password: qa-owner-pass
+
+  - id: read_decrypted
+    type: io.kestra.plugin.pdfbox.metadata.Read
+    from: "{{ outputs.decrypt.uri }}"
+
+  - id: fill_form
+    type: io.kestra.plugin.pdfbox.form.Fill
+    from: "{{ inputs.form }}"
+    fields:
+      full_name: Jane Doe
+      start_date: "2026-11-02"
+      remote: "true"
+
+  - id: fill_and_flatten
+    type: io.kestra.plugin.pdfbox.form.Fill
+    from: "{{ inputs.form }}"
+    fields:
+      full_name: Jane Doe
+      start_date: "2026-11-02"
+    flatten: true
+
+  - id: read_flattened_text
+    type: io.kestra.plugin.pdfbox.text.Extract
+    from: "{{ outputs.fill_and_flatten.uri }}"
+
+  - id: summary
+    type: io.kestra.plugin.core.log.Log
+    message: |
+      html_to_pdf pages={{ outputs.html_to_pdf.pageCount }}
+      extract_text pages={{ outputs.extract_text.pageCount }} invoiceFound={{ outputs.extract_text.text contains 'INV-2026-0042' }}
+      read_metadata title={{ outputs.read_metadata.title }} author={{ outputs.read_metadata.author }} custom={{ outputs.read_metadata.custom }}
+      render_pages count={{ outputs.render_pages.count }}
+      images_to_pdf pages={{ outputs.images_to_pdf.pageCount }}
+      merge pages={{ outputs.merge.pageCount }}
+      split parts={{ outputs.split.count }}
+      extract_images count={{ outputs.extract_images.count }}
+      read_encrypted totalFound={{ outputs.read_encrypted.text contains '7,050.00' }}
+      read_decrypted encrypted={{ outputs.read_decrypted.encrypted }}
+      fill_form filled={{ outputs.fill_form.filledFields }}
+      flattened text has name={{ outputs.read_flattened_text.text contains 'Jane Doe' }}
