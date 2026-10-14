@@ -49,6 +49,12 @@ dependencies {
     annotationProcessor group: "io.kestra", name: "processor", version: kestraVersion
     compileOnly group: "io.kestra", name: "core", version: kestraVersion
     compileOnly group: "io.kestra", name: "script", version: kestraVersion
+
+    // Apache PDFBox
+    api "org.apache.pdfbox:pdfbox:3.0.7"
+
+    // HTML to PDF (document.FromHtml), the maintained OpenHTMLtoPDF fork built on PDFBox 3
+    implementation "io.github.openhtmltopdf:openhtmltopdf-pdfbox:1.1.97"
 }
 
 

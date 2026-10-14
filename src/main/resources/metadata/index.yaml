@@ -1,8 +1,8 @@
 group: io.kestra.plugin.pdfbox
 name: "pdfbox"
 title: "Apache PDFBox"
-description: "Apache PDFBox plugin for Kestra"
-body: ""
+description: "Tasks that create, read, split, merge, secure and render PDF files with Apache PDFBox."
+body: "Extract text and metadata from PDFs, merge and split documents, render pages to images for OCR or AI tasks, build PDFs from images or HTML, fill forms and manage passwords, all inside the worker JVM with files in Kestra internal storage."
 videos: []
 createdBy: "Kestra Core Team"
 managedBy: "Kestra Core Team"

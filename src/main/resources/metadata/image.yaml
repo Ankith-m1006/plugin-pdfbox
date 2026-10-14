@@ -1,0 +1,8 @@
+group: io.kestra.plugin.pdfbox.image
+name: "image"
+title: "Images"
+description: "Render PDF pages to PNG or JPEG and extract the images embedded in a PDF."
+body: ""
+videos: []
+createdBy: "Kestra Core Team"
+managedBy: "Kestra Core Team"

@@ -1,0 +1,8 @@
+group: io.kestra.plugin.pdfbox.text
+name: "text"
+title: "Text"
+description: "Extract the text layer of PDF files, for the whole document, a page range or page by page."
+body: ""
+videos: []
+createdBy: "Kestra Core Team"
+managedBy: "Kestra Core Team"

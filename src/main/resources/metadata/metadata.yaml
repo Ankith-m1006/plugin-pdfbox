@@ -1,0 +1,8 @@
+group: io.kestra.plugin.pdfbox.metadata
+name: "metadata"
+title: "Metadata"
+description: "Read and update the title, author, keywords, dates and custom keys of a PDF."
+body: ""
+videos: []
+createdBy: "Kestra Core Team"
+managedBy: "Kestra Core Team"

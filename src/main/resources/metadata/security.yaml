@@ -1,0 +1,8 @@
+group: io.kestra.plugin.pdfbox.security
+name: "security"
+title: "Security"
+description: "Encrypt a PDF with passwords and permissions, or remove its protection."
+body: ""
+videos: []
+createdBy: "Kestra Core Team"
+managedBy: "Kestra Core Team"

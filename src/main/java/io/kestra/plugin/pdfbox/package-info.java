@@ -1,6 +1,6 @@
 @PluginSubGroup(
     title = "Apache PDFBox",
-    description = "Apache PDFBox plugin for Kestra",
+    description = "Tasks that create, read, split, merge, secure and render PDF files with Apache PDFBox.",
     categories = PluginSubGroup.PluginCategory.DATA
 )
 package io.kestra.plugin.pdfbox;

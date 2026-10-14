@@ -1,0 +1,8 @@
+group: io.kestra.plugin.pdfbox.form
+name: "form"
+title: "Forms"
+description: "Fill AcroForm fields and optionally flatten them."
+body: ""
+videos: []
+createdBy: "Kestra Core Team"
+managedBy: "Kestra Core Team"

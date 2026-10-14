@@ -1,0 +1,8 @@
+group: io.kestra.plugin.pdfbox.document
+name: "document"
+title: "Documents"
+description: "Merge and split PDF files, and create PDFs from images or HTML."
+body: ""
+videos: []
+createdBy: "Kestra Core Team"
+managedBy: "Kestra Core Team"
