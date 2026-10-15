@@ -8,6 +8,7 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -74,13 +75,16 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
     private Property<String> password;
 
     @Schema(title = "First page to read, starting at 1")
+    @Min(1)
     @Builder.Default
     private Property<Integer> startPage = Property.ofValue(1);
 
     @Schema(title = "Last page to read, inclusive. Defaults to the last page")
+    @Min(1)
     private Property<Integer> endPage;
 
     @Schema(title = "Maximum number of images to extract before failing")
+    @Min(1)
     @Builder.Default
     private Property<Integer> maxImages = Property.ofValue(500);
 
@@ -88,13 +92,17 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
         title = "Largest image to extract, in pixels (width times height)",
         description = "Bigger images are skipped with a warning. The default, 40 million pixels, fits an A4 page scanned at 600 DPI."
     )
+    @Min(1)
     @Builder.Default
     private Property<Long> maxImagePixels = Property.ofValue(40_000_000L);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        int imageLimit = runContext.render(maxImages).as(Integer.class).orElse(500);
+        int imageLimit = positive(runContext, maxImages, 500, "maxImages");
         long pixelLimit = runContext.render(maxImagePixels).as(Long.class).orElse(40_000_000L);
+        if (pixelLimit < 1) {
+            throw new IllegalArgumentException("`maxImagePixels` must be at least 1, got %d.".formatted(pixelLimit));
+        }
 
         List<URI> uris = new ArrayList<>();
         try (PDDocument document = load(runContext, from, password)) {
@@ -106,7 +114,7 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
                 skipped += collect(runContext, pdPage.getResources(), seen, uris, imageLimit, pixelLimit, 0);
             }
             if (skipped > 0) {
-                runContext.logger().warn("Skipped {} images larger than {} pixels.", skipped, pixelLimit);
+                runContext.logger().warn("Skipped {} image(s) larger than {} pixels.", skipped, pixelLimit);
             }
         }
         runContext.logger().info("Extracted {} image(s).", uris.size());
@@ -138,8 +146,11 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
                 }
                 BufferedImage buffered = image.getImage();
                 Path file = runContext.workingDir().createTempFile(".png");
-                ImageIO.write(buffered, "png", file.toFile());
+                boolean written = ImageIO.write(buffered, "png", file.toFile());
                 buffered.flush();
+                if (!written) {
+                    throw new IllegalStateException("No PNG writer could encode an image of the PDF.");
+                }
                 uris.add(runContext.storage().putFile(file.toFile()));
             }
         }

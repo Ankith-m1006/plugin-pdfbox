@@ -97,7 +97,7 @@ class DocumentTest {
         Split task = Split.builder().from(Property.ofValue(pdf.toString())).ranges(Property.ofValue(List.of("2-5"))).build();
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> task.run(runContext()));
-        assertThat(error.getMessage(), containsString("2 pages"));
+        assertThat(error.getMessage(), containsString("2 page(s)"));
     }
 
     @Test

@@ -12,6 +12,7 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -88,10 +89,12 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
     private Property<String> password;
 
     @Schema(title = "First page to read, starting at 1")
+    @Min(1)
     @Builder.Default
     private Property<Integer> startPage = Property.ofValue(1);
 
     @Schema(title = "Last page to read, inclusive. Defaults to the last page")
+    @Min(1)
     private Property<Integer> endPage;
 
     @Schema(
@@ -110,16 +113,25 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
 
     @Schema(
         title = "Write the text to internal storage instead of the task output",
-        description = "Task outputs are limited in size, so use this for long documents: `uri` then points to a UTF-8 text file and `text` is empty."
+        description = "Task outputs are limited in size, so use this for long documents: `uri` then points to a UTF-8 text file and `text` is empty. With `perPage`, each page is also written to its own file, listed in `pageUris`."
     )
     @Builder.Default
     private Property<Boolean> store = Property.ofValue(false);
+
+    @Schema(
+        title = "Maximum number of pages to read",
+        description = "The task fails instead of reading more pages than this; narrow the page range for longer documents."
+    )
+    @Min(1)
+    @Builder.Default
+    private Property<Integer> maxPages = Property.ofValue(1000);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
         try (PDDocument document = load(runContext, from, password)) {
             int pageCount = document.getNumberOfPages();
             int[] range = pageRange(runContext, startPage, endPage, pageCount);
+            checkPageLimit(range[1] - range[0] + 1, positive(runContext, maxPages, 1000, "maxPages"), "Reading");
 
             PDFTextStripper stripper = new PDFTextStripper();
             stripper.setSortByPosition(runContext.render(sortByPosition).as(Boolean.class).orElse(false));
@@ -139,12 +151,23 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
 
             runContext.logger().debug("Extracted {} characters from pages {}-{} of {}.", text.length(), range[0], range[1], pageCount);
             if (runContext.render(store).as(Boolean.class).orElse(false)) {
-                Path file = runContext.workingDir().createTempFile(".txt");
-                Files.writeString(file, text, StandardCharsets.UTF_8);
-                return Output.builder().uri(runContext.storage().putFile(file.toFile())).pages(pages).pageCount(pageCount).build();
+                List<URI> pageUris = null;
+                if (pages != null) {
+                    pageUris = new ArrayList<>();
+                    for (String page : pages) {
+                        pageUris.add(storeText(runContext, page));
+                    }
+                }
+                return Output.builder().uri(storeText(runContext, text)).pageUris(pageUris).pageCount(pageCount).build();
             }
             return Output.builder().text(text).pages(pages).pageCount(pageCount).build();
         }
+    }
+
+    private static URI storeText(RunContext runContext, String text) throws Exception {
+        Path file = runContext.workingDir().createTempFile(".txt");
+        Files.writeString(file, text, StandardCharsets.UTF_8);
+        return runContext.storage().putFile(file.toFile());
     }
 
     @Builder
@@ -156,8 +179,11 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
         @Schema(title = "Internal storage URI of the text file, when `store` is true")
         private final URI uri;
 
-        @Schema(title = "Text of each selected page, when `perPage` is true")
+        @Schema(title = "Text of each selected page, when `perPage` is true and `store` is false")
         private final List<String> pages;
+
+        @Schema(title = "Internal storage URIs of each page's text file, when `perPage` and `store` are true")
+        private final List<URI> pageUris;
 
         @Schema(title = "Total number of pages in the document")
         private final Integer pageCount;

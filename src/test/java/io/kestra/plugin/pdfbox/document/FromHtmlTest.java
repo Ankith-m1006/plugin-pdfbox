@@ -12,6 +12,7 @@ import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.Map;
 
@@ -82,6 +83,41 @@ class FromHtmlTest {
         assertThat(FromHtml.isAllowed("file:///etc/passwd", false), is(false));
         assertThat(FromHtml.isAllowed("file:///etc/passwd", true), is(false));
         assertThat(FromHtml.isAllowed("https://example.com/logo.png", true), is(true));
+    }
+
+    @Test
+    void shouldSkipAResourceAboveTheSizeLimitAndStillRender() throws Exception {
+        URI logo = Fixtures.put(storage, Fixtures.png(400, 400), ".png");
+        RunContext runContext = runContext();
+
+        FromHtml.Output output = FromHtml.builder()
+            .html(Property.ofValue("<html><body><img src=\"" + logo + "\"/><p>Invoice</p></body></html>"))
+            .maxResourceBytes(Property.ofValue(100L))
+            .build()
+            .run(runContext);
+
+        try (PDDocument pdf = Fixtures.read(runContext, output.getUri())) {
+            assertThat(new PDFTextStripper().getText(pdf), containsString("Invoice"));
+            assertThat(pdf.getPage(0).getResources().getXObjectNames().iterator().hasNext(), is(false));
+        }
+    }
+
+    @Test
+    void shouldRefuseAnHtmlFileAboveTheSizeLimit() throws Exception {
+        URI page = Fixtures.put(storage, "<html><body><p>a long page</p></body></html>".getBytes(), ".html");
+
+        IOException error = assertThrows(IOException.class, () -> FromHtml.builder()
+            .from(Property.ofValue(page.toString()))
+            .maxResourceBytes(Property.ofValue(10L))
+            .build()
+            .run(runContext()));
+        assertThat(error.getMessage(), containsString("larger than 10 bytes"));
+    }
+
+    @Test
+    void shouldOnlyReportParseErrorsAsMalformedXhtml() {
+        assertThat(FromHtml.isParseError(new RuntimeException(new org.xml.sax.SAXParseException("bad", null))), is(true));
+        assertThat(FromHtml.isParseError(new RuntimeException(new IOException("disk full"))), is(false));
     }
 
     private RunContext runContext() {

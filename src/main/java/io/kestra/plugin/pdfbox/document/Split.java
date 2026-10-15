@@ -8,6 +8,7 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -26,7 +27,7 @@ import java.util.regex.Pattern;
 @NoArgsConstructor
 @Schema(
     title = "Split a PDF into several PDFs",
-    description = "Splits by explicit page ranges (`ranges`) or into chunks of `everyNPages` pages. Each part is stored in internal storage; the output lists them in order."
+    description = "Splits by explicit page ranges (`ranges`) or into chunks of `everyNPages` pages. Each part is stored in internal storage; the output lists them in order. The parts are not encrypted, so an encrypted input needs its owner password."
 )
 @Plugin(
     examples = {
@@ -78,7 +79,10 @@ public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Outp
     @PluginProperty(internalStorageURI = true, group = "source")
     private Property<String> from;
 
-    @Schema(title = "Password of an encrypted PDF")
+    @Schema(
+        title = "Owner password of an encrypted PDF",
+        description = "The parts are written unencrypted, so the user password alone is refused."
+    )
     @PluginProperty(secret = true, group = "source")
     @ToString.Exclude
     private Property<String> password;
@@ -93,7 +97,16 @@ public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Outp
         title = "Split into chunks of this many pages",
         description = "The last chunk holds the remaining pages. Set either `ranges` or `everyNPages`."
     )
+    @Min(1)
     private Property<Integer> everyNPages;
+
+    @Schema(
+        title = "Maximum number of parts to write",
+        description = "The task fails instead of writing more parts than this, so a very long document split page by page cannot fill the worker's storage."
+    )
+    @Min(1)
+    @Builder.Default
+    private Property<Integer> maxParts = Property.ofValue(1000);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
@@ -106,10 +119,21 @@ public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Outp
             throw new IllegalArgumentException("`everyNPages` must be at least 1, got %d.".formatted(chunk));
         }
 
+        int partLimit = positive(runContext, maxParts, 1000, "maxParts");
+
         List<URI> uris = new ArrayList<>();
         try (PDDocument document = load(runContext, from, password)) {
+            requireOwnerPermission(document, "Split");
             int pageCount = document.getNumberOfPages();
+            if (pageCount == 0) {
+                throw new IllegalArgumentException("The PDF has no pages.");
+            }
             List<int[]> parts = chunk != null ? chunks(pageCount, chunk) : parse(rangeList, pageCount);
+            if (parts.size() > partLimit) {
+                throw new IllegalArgumentException(
+                    "Splitting would write %d parts, more than `maxParts` (%d); use bigger chunks or raise the limit.".formatted(parts.size(), partLimit)
+                );
+            }
             for (int[] part : parts) {
                 try (PDDocument output = new PDDocument()) {
                     for (int page = part[0]; page <= part[1]; page++) {
@@ -142,7 +166,7 @@ public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Outp
             int end = matcher.group(2) == null ? start : Integer.parseInt(matcher.group(2));
             if (start < 1 || end < start || end > pageCount) {
                 throw new IllegalArgumentException(
-                    "Page range '%s' is outside the document, which has %d pages.".formatted(range, pageCount)
+                    "Page range '%s' is outside the document, which has %d page(s).".formatted(range, pageCount)
                 );
             }
             parts.add(new int[]{start, end});

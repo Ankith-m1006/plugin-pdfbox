@@ -7,6 +7,7 @@ import io.kestra.core.utils.IdUtils;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -23,6 +24,7 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.apache.pdfbox.pdmodel.interactive.form.PDCheckBox;
 import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
+import org.apache.pdfbox.pdmodel.interactive.form.PDXFAResource;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
 
 import javax.imageio.ImageIO;
@@ -100,6 +102,32 @@ public final class Fixtures {
                 new PDAppearanceDictionary(appearance));
             form.getFields().add(remote);
 
+            return bytes(document);
+        }
+    }
+
+    public static byte[] emptyPdf() throws Exception {
+        try (PDDocument document = new PDDocument()) {
+            return bytes(document);
+        }
+    }
+
+    /** One blank page of the given size in points; a big one stands in for a hostile media box. */
+    public static byte[] pagePdf(float width, float height) throws Exception {
+        try (PDDocument document = new PDDocument()) {
+            document.addPage(new PDPage(new PDRectangle(width, height)));
+            return bytes(document);
+        }
+    }
+
+    /** The form of {@link #formPdf()} with an XFA packet, like the hybrid forms Acrobat produces. */
+    public static byte[] hybridFormPdf() throws Exception {
+        try (PDDocument document = Loader.loadPDF(formPdf())) {
+            COSStream xfa = document.getDocument().createCOSStream();
+            try (var out = xfa.createOutputStream()) {
+                out.write("<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"/>".getBytes(StandardCharsets.UTF_8));
+            }
+            document.getDocumentCatalog().getAcroForm().setXFA(new PDXFAResource(xfa));
             return bytes(document);
         }
     }

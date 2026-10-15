@@ -64,6 +64,14 @@ public class Update extends AbstractPdfboxTask implements RunnableTask<Update.Ou
     @PluginProperty(internalStorageURI = true, group = "source")
     private Property<String> from;
 
+    @Schema(
+        title = "Owner password of an encrypted PDF",
+        description = "The updated PDF is written unencrypted, so the user password alone is refused."
+    )
+    @PluginProperty(secret = true, group = "source")
+    @ToString.Exclude
+    private Property<String> password;
+
     @Schema(title = "New document title")
     private Property<String> title;
 
@@ -84,7 +92,8 @@ public class Update extends AbstractPdfboxTask implements RunnableTask<Update.Ou
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        try (PDDocument document = load(runContext, from, Property.ofValue(""))) {
+        try (PDDocument document = load(runContext, from, password)) {
+            requireOwnerPermission(document, "metadata.Update");
             PDDocumentInformation info = document.getDocumentInformation();
             runContext.render(title).as(String.class).ifPresent(info::setTitle);
             runContext.render(author).as(String.class).ifPresent(info::setAuthor);

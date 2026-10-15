@@ -7,6 +7,7 @@ import com.openhtmltopdf.outputdevice.helper.ExternalResourceControlPriority;
 import com.openhtmltopdf.pdfboxout.PdfRendererBuilder;
 import io.kestra.core.http.HttpRequest;
 import io.kestra.core.http.client.HttpClient;
+import io.kestra.core.http.client.configurations.HttpConfiguration;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
 import io.kestra.core.models.annotations.PluginProperty;
@@ -15,12 +16,16 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Min;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.slf4j.Logger;
+import org.xml.sax.SAXException;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -46,7 +51,8 @@ import java.util.Locale;
         Images, stylesheets and fonts are loaded only from inline `data:` URIs and Kestra internal storage (`kestra://` URIs, \
         or paths relative to `baseUri` when it points to internal storage). Remote `http(s)` resources are blocked by default \
         because the HTML may come from user input; set `allowRemoteResources` to fetch them through Kestra's HTTP client. \
-        `file:` URIs are always blocked."""
+        `file:` URIs are always blocked. A resource that cannot be loaded is skipped with a warning naming its URL, and \
+        the `from` file and every resource are limited to `maxResourceBytes`."""
 )
 @Plugin(
     examples = {
@@ -76,7 +82,7 @@ import java.util.Locale;
                 """
         ),
         @Example(
-            title = "Render an HTML file from internal storage with a logo stored next to it",
+            title = "Render an uploaded HTML file",
             full = true,
             code = """
                 id: pdf_from_html_file
@@ -85,6 +91,22 @@ import java.util.Locale;
                 inputs:
                   - id: page
                     type: FILE
+
+                tasks:
+                  - id: render
+                    type: io.kestra.plugin.pdfbox.document.FromHtml
+                    from: "{{ inputs.page }}"
+                    pageSize: LETTER
+                """
+        ),
+        @Example(
+            title = "Embed an uploaded logo in generated HTML",
+            full = true,
+            code = """
+                id: pdf_from_html_logo
+                namespace: company.team
+
+                inputs:
                   - id: logo
                     type: FILE
 
@@ -96,7 +118,6 @@ import java.util.Locale;
                         <img src="{{ inputs.logo }}" width="120"/>
                         <p>Invoice</p>
                       </body></html>
-                    pageSize: LETTER
                 """
         )
     }
@@ -130,6 +151,14 @@ public class FromHtml extends AbstractPdfboxTask implements RunnableTask<FromHtm
     @Builder.Default
     private Property<Boolean> allowRemoteResources = Property.ofValue(false);
 
+    @Schema(
+        title = "Largest HTML file or resource to load, in bytes",
+        description = "Applies to the `from` file and to every image, stylesheet or font, from internal storage or the network."
+    )
+    @Min(1)
+    @Builder.Default
+    private Property<Long> maxResourceBytes = Property.ofValue(20L * 1024 * 1024);
+
     @Override
     public Output run(RunContext runContext) throws Exception {
         String inline = runContext.render(html).as(String.class).orElse(null);
@@ -137,9 +166,19 @@ public class FromHtml extends AbstractPdfboxTask implements RunnableTask<FromHtm
         if ((inline == null) == (fromUri == null)) {
             throw new IllegalArgumentException("Set exactly one of `html` or `from`.");
         }
-        String content = inline != null ? inline : Files.readString(download(runContext, fromUri, ".html"), StandardCharsets.UTF_8);
+        long sizeLimit = runContext.render(maxResourceBytes).as(Long.class).orElse(20L * 1024 * 1024);
+        if (sizeLimit < 1) {
+            throw new IllegalArgumentException("`maxResourceBytes` must be at least 1, got %d.".formatted(sizeLimit));
+        }
+        String content = inline;
+        if (content == null) {
+            try (InputStream in = runContext.storage().getFile(URI.create(fromUri))) {
+                content = new String(readLimited(in, sizeLimit, fromUri), StandardCharsets.UTF_8);
+            }
+        }
         String base = runContext.render(baseUri).as(String.class).orElse(fromUri);
         boolean remote = runContext.render(allowRemoteResources).as(Boolean.class).orElse(false);
+        Logger logger = runContext.logger();
 
         FromImages.PageSize size = runContext.render(pageSize).as(FromImages.PageSize.class).orElse(FromImages.PageSize.A4);
         if (size == FromImages.PageSize.IMAGE) {
@@ -148,24 +187,27 @@ public class FromHtml extends AbstractPdfboxTask implements RunnableTask<FromHtm
         PDRectangle page = size.rectangle(runContext.render(orientation).as(FromImages.Orientation.class).orElse(FromImages.Orientation.PORTRAIT));
 
         Path target = runContext.workingDir().createTempFile(".pdf");
-        try (OutputStream out = Files.newOutputStream(target); HttpClient client = remote ? HttpClient.builder().runContext(runContext).build() : null) {
+        try (OutputStream out = Files.newOutputStream(target); HttpClient client = remote ? httpClient(runContext, sizeLimit) : null) {
             PdfRendererBuilder builder = new PdfRendererBuilder();
             builder.useFastMode();
             builder.withHtmlContent(content, base);
             builder.useDefaultPageSize(toMillimeters(page.getWidth()), toMillimeters(page.getHeight()), BaseRendererBuilder.PageSizeUnits.MM);
             builder.useUriResolver(FromHtml::resolve);
             builder.useExternalResourceAccessControl((uri, type) -> isAllowed(uri, remote), ExternalResourceControlPriority.RUN_AFTER_RESOLVING_URI);
-            builder.useProtocolsStreamImplementation(new StorageStreamFactory(runContext), "kestra");
+            builder.useProtocolsStreamImplementation(new StorageStreamFactory(runContext, sizeLimit, logger), "kestra");
             if (client != null) {
-                builder.useHttpStreamImplementation(new KestraHttpStreamFactory(client));
+                builder.useHttpStreamImplementation(new KestraHttpStreamFactory(client, sizeLimit, logger));
             }
             builder.toStream(out);
             try {
                 builder.run();
             } catch (Exception e) {
-                throw new IllegalArgumentException(
-                    "Unable to render the HTML to PDF; check that it is well-formed XHTML (closed tags, `&amp;` for `&`): " + e.getMessage(), e
-                );
+                if (isParseError(e)) {
+                    throw new IllegalArgumentException(
+                        "Unable to parse the HTML; it must be well-formed XHTML (closed tags, `&amp;` for `&`): " + rootMessage(e), e
+                    );
+                }
+                throw new IOException("Unable to render the HTML to PDF: " + rootMessage(e), e);
             }
         }
 
@@ -175,6 +217,30 @@ public class FromHtml extends AbstractPdfboxTask implements RunnableTask<FromHtm
         }
         URI uri = runContext.storage().putFile(target.toFile());
         return Output.builder().uri(uri).pageCount(pageCount).build();
+    }
+
+    private static HttpClient httpClient(RunContext runContext, long sizeLimit) throws Exception {
+        return HttpClient.builder()
+            .runContext(runContext)
+            .configuration(HttpConfiguration.builder().maxContentLength((int) Math.min(sizeLimit, Integer.MAX_VALUE)).build())
+            .build();
+    }
+
+    static boolean isParseError(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SAXException || cause instanceof javax.xml.transform.TransformerException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String rootMessage(Throwable error) {
+        Throwable root = error;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root.getMessage() != null ? root.getMessage() : error.toString();
     }
 
     static boolean isAllowed(String uri, boolean remote) {
@@ -213,32 +279,39 @@ public class FromHtml extends AbstractPdfboxTask implements RunnableTask<FromHtm
         return points * 25.4f / 72f;
     }
 
-    private record StorageStreamFactory(RunContext runContext) implements FSStreamFactory {
+    private record StorageStreamFactory(RunContext runContext, long sizeLimit, Logger logger) implements FSStreamFactory {
         @Override
         public FSStream getUrl(String url) {
-            return new BytesStream(() -> {
+            return new BytesStream(url, logger, () -> {
                 try (InputStream in = runContext.storage().getFile(URI.create(url))) {
-                    return in.readAllBytes();
+                    return readLimited(in, sizeLimit, url);
                 }
             });
         }
     }
 
-    private record KestraHttpStreamFactory(HttpClient client) implements FSStreamFactory {
+    private record KestraHttpStreamFactory(HttpClient client, long sizeLimit, Logger logger) implements FSStreamFactory {
         @Override
         public FSStream getUrl(String url) {
-            return new BytesStream(() -> client.request(HttpRequest.of(URI.create(url)), byte[].class).getBody());
+            return new BytesStream(url, logger, () -> {
+                byte[] body = client.request(HttpRequest.of(URI.create(url)), byte[].class).getBody();
+                if (body != null && body.length > sizeLimit) {
+                    throw new IOException("'%s' is larger than %d bytes.".formatted(url, sizeLimit));
+                }
+                return body;
+            });
         }
     }
 
-    private record BytesStream(ThrowingSupplier supplier) implements FSStream {
+    private record BytesStream(String url, Logger logger, ThrowingSupplier supplier) implements FSStream {
         @Override
         public InputStream getStream() {
             try {
                 byte[] bytes = supplier.get();
                 return bytes == null ? null : new ByteArrayInputStream(bytes);
             } catch (Exception e) {
-                // OpenHTMLtoPDF treats a null stream as a missing resource and keeps rendering.
+                // OpenHTMLtoPDF treats a null stream as a missing resource and keeps rendering; name the skipped resource.
+                logger.warn("Skipped the resource '{}': {}", url, e.getMessage());
                 return null;
             }
         }

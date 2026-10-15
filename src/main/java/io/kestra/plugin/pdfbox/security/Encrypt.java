@@ -24,7 +24,7 @@ import java.net.URI;
 @NoArgsConstructor
 @Schema(
     title = "Password protect a PDF",
-    description = "Encrypts a PDF with AES-256 (or AES-128). The user password is needed to open the file; the owner password unlocks every permission. Permissions such as printing or copying are enforced by PDF readers, not by the encryption itself."
+    description = "Encrypts an unencrypted PDF with AES-256 (or AES-128); an already encrypted input fails, decrypt it first. The user password is needed to open the file; the owner password unlocks every permission. Permissions such as printing or copying are enforced by PDF readers, not by the encryption itself."
 )
 @Plugin(
     examples = {
@@ -117,6 +117,12 @@ public class Encrypt extends AbstractPdfboxTask implements RunnableTask<Encrypt.
         policy.setEncryptionKeyLength(runContext.render(keyLength).as(KeyLength.class).orElse(KeyLength.AES_256).bits);
 
         try (PDDocument document = load(runContext, from, Property.ofValue(""))) {
+            if (document.isEncrypted()) {
+                // Opening with an empty user password must not let a new owner password replace one we never knew.
+                throw new IllegalArgumentException(
+                    "The PDF is already encrypted. Remove the protection with `security.Decrypt` and its owner password first."
+                );
+            }
             document.protect(policy);
             return Output.builder().uri(save(runContext, document)).build();
         }

@@ -62,7 +62,10 @@ public class Fill extends AbstractPdfboxTask implements RunnableTask<Fill.Output
     @PluginProperty(internalStorageURI = true, group = "source")
     private Property<String> from;
 
-    @Schema(title = "Password of an encrypted PDF")
+    @Schema(
+        title = "Owner password of an encrypted PDF",
+        description = "The filled form is written unencrypted, so the user password alone is refused."
+    )
     @PluginProperty(secret = true, group = "source")
     @ToString.Exclude
     private Property<String> password;
@@ -85,9 +88,16 @@ public class Fill extends AbstractPdfboxTask implements RunnableTask<Fill.Output
         boolean ignoreUnknown = runContext.render(ignoreUnknownFields).as(Boolean.class).orElse(false);
 
         try (PDDocument document = load(runContext, from, password)) {
+            requireOwnerPermission(document, "form.Fill");
             PDAcroForm form = document.getDocumentCatalog().getAcroForm();
             if (form == null) {
                 throw new IllegalArgumentException("The PDF has no form fields to fill.");
+            }
+            if (form.hasXFA()) {
+                // Hybrid forms carry an XFA copy of the values that Acrobat prefers over the AcroForm fields.
+                // Dropping it makes every reader show the values filled here.
+                form.setXFA(null);
+                runContext.logger().info("Removed the XFA layer of the hybrid form so readers show the filled AcroForm values.");
             }
 
             List<String> unknown = new ArrayList<>();
@@ -118,6 +128,10 @@ public class Fill extends AbstractPdfboxTask implements RunnableTask<Fill.Output
     }
 
     private static void setValue(PDField field, String value) throws Exception {
+        // A null value (for example an empty YAML value) clears the field.
+        if (value == null) {
+            value = "";
+        }
         if (field instanceof PDCheckBox checkBox) {
             if ("true".equalsIgnoreCase(value) || value.equals(checkBox.getOnValue())) {
                 checkBox.check();

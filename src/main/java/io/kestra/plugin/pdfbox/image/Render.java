@@ -8,10 +8,13 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
@@ -68,13 +71,17 @@ public class Render extends AbstractPdfboxTask implements RunnableTask<Render.Ou
     private Property<String> password;
 
     @Schema(title = "First page to render, starting at 1")
+    @Min(1)
     @Builder.Default
     private Property<Integer> startPage = Property.ofValue(1);
 
     @Schema(title = "Last page to render, inclusive. Defaults to the last page")
+    @Min(1)
     private Property<Integer> endPage;
 
     @Schema(title = "Resolution in dots per inch, between 36 and 600")
+    @Min(36)
+    @Max(MAX_DPI)
     @Builder.Default
     private Property<Integer> dpi = Property.ofValue(150);
 
@@ -90,8 +97,17 @@ public class Render extends AbstractPdfboxTask implements RunnableTask<Render.Ou
         title = "Maximum number of pages to render",
         description = "The task fails instead of rendering more pages than this, so a very long document cannot fill the worker's memory and storage."
     )
+    @Min(1)
     @Builder.Default
     private Property<Integer> maxPages = Property.ofValue(100);
+
+    @Schema(
+        title = "Largest page image to render, in pixels (width times height)",
+        description = "Checked from the page size and the DPI before rendering, so a page with a huge media box cannot exhaust the worker's memory. The default, 40 million pixels, fits an A4 page at 600 DPI."
+    )
+    @Min(1)
+    @Builder.Default
+    private Property<Long> maxPagePixels = Property.ofValue(40_000_000L);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
@@ -101,21 +117,21 @@ public class Render extends AbstractPdfboxTask implements RunnableTask<Render.Ou
         }
         Format imageFormat = runContext.render(format).as(Format.class).orElse(Format.PNG);
         boolean gray = runContext.render(grayscale).as(Boolean.class).orElse(false);
-        int limit = runContext.render(maxPages).as(Integer.class).orElse(100);
+        int limit = positive(runContext, maxPages, 100, "maxPages");
+        long pixelLimit = runContext.render(maxPagePixels).as(Long.class).orElse(40_000_000L);
+        if (pixelLimit < 1) {
+            throw new IllegalArgumentException("`maxPagePixels` must be at least 1, got %d.".formatted(pixelLimit));
+        }
 
         List<URI> uris = new ArrayList<>();
         try (PDDocument document = load(runContext, from, password)) {
             int[] range = pageRange(runContext, startPage, endPage, document.getNumberOfPages());
-            int pages = range[1] - range[0] + 1;
-            if (pages > limit) {
-                throw new IllegalArgumentException(
-                    "Rendering %d pages exceeds `maxPages` (%d); narrow the page range or raise the limit.".formatted(pages, limit)
-                );
-            }
+            checkPageLimit(range[1] - range[0] + 1, limit, "Rendering");
 
             PDFRenderer renderer = new PDFRenderer(document);
             ImageType type = gray ? ImageType.GRAY : (imageFormat == Format.JPEG ? ImageType.RGB : ImageType.ARGB);
             for (int page = range[0]; page <= range[1]; page++) {
+                checkPixels(document.getPage(page - 1).getCropBox(), resolution, pixelLimit, page);
                 BufferedImage image = renderer.renderImageWithDPI(page - 1, resolution, type);
                 Path file = runContext.workingDir().createTempFile(imageFormat.extension);
                 if (!ImageIO.write(image, imageFormat.writer, file.toFile())) {
@@ -127,6 +143,17 @@ public class Render extends AbstractPdfboxTask implements RunnableTask<Render.Ou
         }
         runContext.logger().info("Rendered {} page(s) at {} DPI.", uris.size(), resolution);
         return Output.builder().uris(uris).count(uris.size()).build();
+    }
+
+    static void checkPixels(PDRectangle box, int dpi, long limit, int page) {
+        double scale = dpi / 72.0;
+        long pixels = (long) Math.ceil(box.getWidth() * scale) * (long) Math.ceil(box.getHeight() * scale);
+        if (pixels > limit) {
+            throw new IllegalArgumentException(
+                "Page %d at %d DPI would be %d pixels, more than `maxPagePixels` (%d); lower the DPI or raise the limit."
+                    .formatted(page, dpi, pixels, limit)
+            );
+        }
     }
 
     public enum Format {

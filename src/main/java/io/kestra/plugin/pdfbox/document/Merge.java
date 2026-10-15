@@ -8,6 +8,7 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -66,6 +67,19 @@ public class Merge extends AbstractPdfboxTask implements RunnableTask<Merge.Outp
     @PluginProperty(internalStorageURI = true, group = "source")
     private Property<List<String>> files;
 
+    @Schema(title = "Maximum number of PDFs to merge")
+    @Min(2)
+    @Builder.Default
+    private Property<Integer> maxFiles = Property.ofValue(100);
+
+    @Schema(
+        title = "Maximum number of pages in the merged PDF",
+        description = "Checked from each input before merging, so the task fails early instead of building a huge document."
+    )
+    @Min(1)
+    @Builder.Default
+    private Property<Integer> maxPages = Property.ofValue(10000);
+
     @Override
     public Output run(RunContext runContext) throws Exception {
         List<String> uris = runContext.render(files).asList(String.class);
@@ -73,11 +87,27 @@ public class Merge extends AbstractPdfboxTask implements RunnableTask<Merge.Outp
             throw new IllegalArgumentException("At least two PDFs are required to merge, got %d.".formatted(uris.size()));
         }
 
+        int fileLimit = positive(runContext, maxFiles, 100, "maxFiles");
+        if (uris.size() > fileLimit) {
+            throw new IllegalArgumentException(
+                "%d PDFs is more than `maxFiles` (%d); merge in batches or raise the limit.".formatted(uris.size(), fileLimit)
+            );
+        }
+        int pageLimit = positive(runContext, maxPages, 10000, "maxPages");
+
         PDFMergerUtility merger = new PDFMergerUtility();
+        int totalPages = 0;
         for (String uri : uris) {
             File file = download(runContext, uri, ".pdf").toFile();
             // Validate each input up front so a corrupt or encrypted file is named in the error.
-            try (PDDocument ignored = load(file, "", uri)) {
+            try (PDDocument input = load(file, "", uri)) {
+                if (input.isEncrypted()) {
+                    throw new IllegalArgumentException(
+                        "'%s' is encrypted; remove the protection with `security.Decrypt` before merging.".formatted(uri)
+                    );
+                }
+                totalPages += input.getNumberOfPages();
+                checkPageLimit(totalPages, pageLimit, "The merged PDF would have");
                 merger.addSource(file);
             }
         }
@@ -91,7 +121,7 @@ public class Merge extends AbstractPdfboxTask implements RunnableTask<Merge.Outp
             pageCount = merged.getNumberOfPages();
         }
         URI uri = runContext.storage().putFile(target.toFile());
-        runContext.logger().info("Merged {} PDFs into {} page(s).", uris.size(), pageCount);
+        runContext.logger().info("Merged {} PDF(s) into {} page(s).", uris.size(), pageCount);
         return Output.builder().uri(uri).pageCount(pageCount).build();
     }
 
