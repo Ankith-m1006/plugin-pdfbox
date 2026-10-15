@@ -71,19 +71,15 @@ public class Render extends AbstractPdfboxTask implements RunnableTask<Render.Ou
     private Property<String> password;
 
     @Schema(title = "First page to render, starting at 1")
-    @Min(1)
     @Builder.Default
-    private Property<Integer> startPage = Property.ofValue(1);
+    private Property<@Min(1) Integer> startPage = Property.ofValue(1);
 
     @Schema(title = "Last page to render, inclusive. Defaults to the last page")
-    @Min(1)
-    private Property<Integer> endPage;
+    private Property<@Min(1) Integer> endPage;
 
     @Schema(title = "Resolution in dots per inch, between 36 and 600")
-    @Min(36)
-    @Max(MAX_DPI)
     @Builder.Default
-    private Property<Integer> dpi = Property.ofValue(150);
+    private Property<@Min(36) @Max(MAX_DPI) Integer> dpi = Property.ofValue(150);
 
     @Schema(title = "Image format")
     @Builder.Default
@@ -97,17 +93,15 @@ public class Render extends AbstractPdfboxTask implements RunnableTask<Render.Ou
         title = "Maximum number of pages to render",
         description = "The task fails instead of rendering more pages than this, so a very long document cannot fill the worker's memory and storage."
     )
-    @Min(1)
     @Builder.Default
-    private Property<Integer> maxPages = Property.ofValue(100);
+    private Property<@Min(1) Integer> maxPages = Property.ofValue(100);
 
     @Schema(
         title = "Largest page image to render, in pixels (width times height)",
         description = "Checked from the page size and the DPI before rendering, so a page with a huge media box cannot exhaust the worker's memory. The default, 40 million pixels, fits an A4 page at 600 DPI."
     )
-    @Min(1)
     @Builder.Default
-    private Property<Long> maxPagePixels = Property.ofValue(40_000_000L);
+    private Property<@Min(1) Long> maxPagePixels = Property.ofValue(40_000_000L);
 
     @Override
     public Output run(RunContext runContext) throws Exception {

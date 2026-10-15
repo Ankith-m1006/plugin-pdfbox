@@ -89,13 +89,11 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
     private Property<String> password;
 
     @Schema(title = "First page to read, starting at 1")
-    @Min(1)
     @Builder.Default
-    private Property<Integer> startPage = Property.ofValue(1);
+    private Property<@Min(1) Integer> startPage = Property.ofValue(1);
 
     @Schema(title = "Last page to read, inclusive. Defaults to the last page")
-    @Min(1)
-    private Property<Integer> endPage;
+    private Property<@Min(1) Integer> endPage;
 
     @Schema(
         title = "Also return the text of each page separately",
@@ -122,9 +120,8 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
         title = "Maximum number of pages to read",
         description = "The task fails instead of reading more pages than this; narrow the page range for longer documents."
     )
-    @Min(1)
     @Builder.Default
-    private Property<Integer> maxPages = Property.ofValue(1000);
+    private Property<@Min(1) Integer> maxPages = Property.ofValue(1000);
 
     @Override
     public Output run(RunContext runContext) throws Exception {

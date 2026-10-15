@@ -97,16 +97,14 @@ public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Outp
         title = "Split into chunks of this many pages",
         description = "The last chunk holds the remaining pages. Set either `ranges` or `everyNPages`."
     )
-    @Min(1)
-    private Property<Integer> everyNPages;
+    private Property<@Min(1) Integer> everyNPages;
 
     @Schema(
         title = "Maximum number of parts to write",
         description = "The task fails instead of writing more parts than this, so a very long document split page by page cannot fill the worker's storage."
     )
-    @Min(1)
     @Builder.Default
-    private Property<Integer> maxParts = Property.ofValue(1000);
+    private Property<@Min(1) Integer> maxParts = Property.ofValue(1000);
 
     @Override
     public Output run(RunContext runContext) throws Exception {

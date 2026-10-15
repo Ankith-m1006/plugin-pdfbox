@@ -68,17 +68,15 @@ public class Merge extends AbstractPdfboxTask implements RunnableTask<Merge.Outp
     private Property<List<String>> files;
 
     @Schema(title = "Maximum number of PDFs to merge")
-    @Min(2)
     @Builder.Default
-    private Property<Integer> maxFiles = Property.ofValue(100);
+    private Property<@Min(2) Integer> maxFiles = Property.ofValue(100);
 
     @Schema(
         title = "Maximum number of pages in the merged PDF",
         description = "Checked from each input before merging, so the task fails early instead of building a huge document."
     )
-    @Min(1)
     @Builder.Default
-    private Property<Integer> maxPages = Property.ofValue(10000);
+    private Property<@Min(1) Integer> maxPages = Property.ofValue(10000);
 
     @Override
     public Output run(RunContext runContext) throws Exception {

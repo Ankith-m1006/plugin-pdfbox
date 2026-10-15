@@ -75,26 +75,22 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
     private Property<String> password;
 
     @Schema(title = "First page to read, starting at 1")
-    @Min(1)
     @Builder.Default
-    private Property<Integer> startPage = Property.ofValue(1);
+    private Property<@Min(1) Integer> startPage = Property.ofValue(1);
 
     @Schema(title = "Last page to read, inclusive. Defaults to the last page")
-    @Min(1)
-    private Property<Integer> endPage;
+    private Property<@Min(1) Integer> endPage;
 
     @Schema(title = "Maximum number of images to extract before failing")
-    @Min(1)
     @Builder.Default
-    private Property<Integer> maxImages = Property.ofValue(500);
+    private Property<@Min(1) Integer> maxImages = Property.ofValue(500);
 
     @Schema(
         title = "Largest image to extract, in pixels (width times height)",
         description = "Bigger images are skipped with a warning. The default, 40 million pixels, fits an A4 page scanned at 600 DPI."
     )
-    @Min(1)
     @Builder.Default
-    private Property<Long> maxImagePixels = Property.ofValue(40_000_000L);
+    private Property<@Min(1) Long> maxImagePixels = Property.ofValue(40_000_000L);
 
     @Override
     public Output run(RunContext runContext) throws Exception {

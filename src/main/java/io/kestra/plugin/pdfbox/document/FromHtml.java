@@ -155,9 +155,8 @@ public class FromHtml extends AbstractPdfboxTask implements RunnableTask<FromHtm
         title = "Largest HTML file or resource to load, in bytes",
         description = "Applies to the `from` file and to every image, stylesheet or font, from internal storage or the network."
     )
-    @Min(1)
     @Builder.Default
-    private Property<Long> maxResourceBytes = Property.ofValue(20L * 1024 * 1024);
+    private Property<@Min(1) Long> maxResourceBytes = Property.ofValue(20L * 1024 * 1024);
 
     @Override
     public Output run(RunContext runContext) throws Exception {

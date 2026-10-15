@@ -77,22 +77,19 @@ public class FromImages extends AbstractPdfboxTask implements RunnableTask<FromI
     private Property<Orientation> orientation = Property.ofValue(Orientation.PORTRAIT);
 
     @Schema(title = "Margin around the image, in points (1/72 inch). Ignored for `IMAGE` page size")
-    @Min(0)
     @Builder.Default
-    private Property<Float> margin = Property.ofValue(0f);
+    private Property<@Min(0) Float> margin = Property.ofValue(0f);
 
     @Schema(title = "Maximum number of images, so one page each")
-    @Min(1)
     @Builder.Default
-    private Property<Integer> maxImages = Property.ofValue(500);
+    private Property<@Min(1) Integer> maxImages = Property.ofValue(500);
 
     @Schema(
         title = "Largest image accepted, in pixels (width times height)",
         description = "Read from the image header before decoding, so an oversized image fails without exhausting the worker's memory. The default, 40 million pixels, fits an A4 page scanned at 600 DPI."
     )
-    @Min(1)
     @Builder.Default
-    private Property<Long> maxImagePixels = Property.ofValue(40_000_000L);
+    private Property<@Min(1) Long> maxImagePixels = Property.ofValue(40_000_000L);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
