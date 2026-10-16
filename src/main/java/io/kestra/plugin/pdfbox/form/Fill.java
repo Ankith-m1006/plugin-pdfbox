@@ -64,7 +64,7 @@ public class Fill extends AbstractPdfboxTask implements RunnableTask<Fill.Output
 
     @Schema(
         title = "Owner password of an encrypted PDF",
-        description = "The filled form is written unencrypted, so the user password alone is refused."
+        description = "The filled form keeps the encryption of the input; changing it needs the owner password, so the user password alone is refused."
     )
     @PluginProperty(secret = true, group = "source")
     @ToString.Exclude
@@ -123,7 +123,7 @@ public class Fill extends AbstractPdfboxTask implements RunnableTask<Fill.Output
             if (runContext.render(flatten).as(Boolean.class).orElse(false)) {
                 form.flatten();
             }
-            return Output.builder().uri(save(runContext, document)).filledFields(filled).build();
+            return Output.builder().uri(saveKeepingProtection(runContext, document)).filledFields(filled).build();
         }
     }
 

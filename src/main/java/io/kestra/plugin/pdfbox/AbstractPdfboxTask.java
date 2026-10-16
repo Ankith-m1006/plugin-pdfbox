@@ -16,6 +16,7 @@ import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -61,27 +62,54 @@ public abstract class AbstractPdfboxTask extends Task {
     }
 
     /**
-     * Tasks that write a changed copy of the input store it unencrypted, like {@code security.Decrypt}.
-     * That is only allowed with the owner password: the user password alone must not strip the protection.
-     * With the owner password, the copy is marked to be saved without its encryption.
+     * Tasks that change an encrypted PDF, like {@code metadata.Update} and {@code form.Fill}, need its owner password:
+     * the user password alone must not lift the restrictions set by the owner. Opened with the owner password,
+     * PDFBox encrypts the saved copy again with the same protection.
      */
     protected static void requireOwnerPermission(PDDocument document, String task) {
-        if (!document.isEncrypted()) {
-            return;
+        requireOwnerPermission(document, task, "changes the PDF");
+    }
+
+    /**
+     * Tasks that write an unencrypted copy, like {@code document.Split}, also need the owner password;
+     * the copy is then marked to be saved without its encryption.
+     */
+    protected static void removeProtection(PDDocument document, String task) {
+        requireOwnerPermission(document, task, "writes an unencrypted copy");
+        if (document.isEncrypted()) {
+            document.setAllSecurityToBeRemoved(true);
         }
-        if (!document.getCurrentAccessPermission().isOwnerPermission()) {
+    }
+
+    private static void requireOwnerPermission(PDDocument document, String task, String effect) {
+        if (document.isEncrypted() && !document.getCurrentAccessPermission().isOwnerPermission()) {
             throw new IllegalArgumentException(
-                "The PDF is encrypted and the password given is not its owner password. `%s` writes an unencrypted copy, "
-                    .formatted(task)
+                "The PDF is encrypted and the password given is not its owner password. `%s` %s, "
+                    .formatted(task, effect)
                     + "which needs the owner password; pass the owner password, or keep the file protected and only read it."
             );
         }
-        document.setAllSecurityToBeRemoved(true);
     }
 
     protected static URI save(RunContext runContext, PDDocument document) throws Exception {
         Path file = runContext.workingDir().createTempFile(".pdf");
         document.save(file.toFile());
+        return runContext.storage().putFile(file.toFile());
+    }
+
+    /**
+     * Saves a changed copy that keeps the protection of an encrypted input. PDFBox refuses a full save of an
+     * encrypted document unless its security is removed or replaced, so the changes are appended as an incremental
+     * update, which reuses the original encryption dictionary and keys. Unencrypted documents are saved normally.
+     */
+    protected static URI saveKeepingProtection(RunContext runContext, PDDocument document) throws Exception {
+        if (!document.isEncrypted()) {
+            return save(runContext, document);
+        }
+        Path file = runContext.workingDir().createTempFile(".pdf");
+        try (OutputStream out = Files.newOutputStream(file)) {
+            document.saveIncremental(out);
+        }
         return runContext.storage().putFile(file.toFile());
     }
 

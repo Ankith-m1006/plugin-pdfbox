@@ -40,7 +40,7 @@ plugin-pdfbox/
 - Open every `PDDocument` in try-with-resources and never keep one on the task instance; tasks stay stateless.
 - Large outputs (pages, images, split files) go to internal storage and are returned as URIs.
 - Keep the documented bounds (`maxPages`, `maxPagePixels`, `maxImages`, `maxImagePixels`, `maxParts`, `maxFiles`, `maxResourceBytes`, the DPI cap) when adding tasks that can expand a hostile input.
-- Tasks that write a changed copy of an encrypted PDF call `requireOwnerPermission`: the user password alone must not strip the protection.
+- Tasks that change an encrypted PDF call `requireOwnerPermission` (the copy keeps its encryption); tasks that write an unencrypted copy, like `Split`, call `removeProtection`. The user password alone is refused in both cases.
 - `document.FromHtml` must not fetch remote resources unless `allowRemoteResources` is set, and then only through Kestra's `HttpClient`; `file:` stays blocked.
 - Password properties use `@PluginProperty(secret = true)` and `@ToString.Exclude`.
 

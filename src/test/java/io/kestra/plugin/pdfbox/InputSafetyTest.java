@@ -113,9 +113,29 @@ class InputSafetyTest {
             .build()
             .run(runContext);
 
-        try (PDDocument updated = Fixtures.read(runContext, output.getUri())) {
-            assertThat(updated.isEncrypted(), is(false));
+        try (PDDocument updated = Fixtures.read(runContext, output.getUri(), "user")) {
+            assertThat(updated.isEncrypted(), is(true));
+            assertThat(updated.getCurrentAccessPermission().canModify(), is(false));
             assertThat(updated.getDocumentInformation().getTitle(), is("New title"));
+        }
+    }
+
+    @Test
+    void shouldFillAnEncryptedFormWithTheOwnerPasswordAndKeepItsProtection() throws Exception {
+        URI pdf = encrypted(Fixtures.formPdf());
+        RunContext runContext = runContext();
+
+        Fill.Output output = Fill.builder()
+            .from(Property.ofValue(pdf.toString()))
+            .password(Property.ofValue("owner"))
+            .fields(Property.ofValue(Map.of("full_name", "Jane Doe")))
+            .build()
+            .run(runContext);
+
+        try (PDDocument filled = Fixtures.read(runContext, output.getUri(), "user")) {
+            assertThat(filled.isEncrypted(), is(true));
+            assertThat(filled.getCurrentAccessPermission().canModify(), is(false));
+            assertThat(filled.getDocumentCatalog().getAcroForm().getField("full_name").getValueAsString(), is("Jane Doe"));
         }
     }
 

@@ -121,7 +121,7 @@ public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Outp
 
         List<URI> uris = new ArrayList<>();
         try (PDDocument document = load(runContext, from, password)) {
-            requireOwnerPermission(document, "Split");
+            removeProtection(document, "Split");
             int pageCount = document.getNumberOfPages();
             if (pageCount == 0) {
                 throw new IllegalArgumentException("The PDF has no pages.");

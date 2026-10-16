@@ -66,7 +66,7 @@ public class Update extends AbstractPdfboxTask implements RunnableTask<Update.Ou
 
     @Schema(
         title = "Owner password of an encrypted PDF",
-        description = "The updated PDF is written unencrypted, so the user password alone is refused."
+        description = "The updated PDF keeps the encryption of the input; changing it needs the owner password, so the user password alone is refused."
     )
     @PluginProperty(secret = true, group = "source")
     @ToString.Exclude
@@ -110,7 +110,7 @@ public class Update extends AbstractPdfboxTask implements RunnableTask<Update.Ou
                 info.setCustomMetadataValue(entry.getKey(), entry.getValue());
             }
             info.setModificationDate(Calendar.getInstance());
-            return Output.builder().uri(save(runContext, document)).build();
+            return Output.builder().uri(saveKeepingProtection(runContext, document)).build();
         }
     }
 
