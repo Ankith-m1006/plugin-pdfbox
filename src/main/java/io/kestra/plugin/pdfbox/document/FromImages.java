@@ -8,6 +8,7 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
@@ -19,11 +20,8 @@ import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 
 import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
-import javax.imageio.stream.ImageInputStream;
 import java.io.File;
 import java.net.URI;
-import java.util.Iterator;
 import java.util.List;
 
 @SuperBuilder
@@ -63,61 +61,66 @@ import java.util.List;
     }
 )
 public class FromImages extends AbstractPdfboxTask implements RunnableTask<FromImages.Output> {
+    static final int MAX_IMAGES = 10_000;
+    static final long MAX_IMAGE_PIXELS = 400_000_000L;
+
     @Schema(title = "The images, as internal storage URIs, one page each in order")
     @NotNull
-    @PluginProperty(internalStorageURI = true, group = "source")
+    @PluginProperty(internalStorageURI = true, group = "main")
     private Property<List<String>> images;
 
-    @Schema(title = "Page size")
+    @Schema(title = "Page size", description = "Default `A4`; `IMAGE` makes each page the size of its image.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<PageSize> pageSize = Property.ofValue(PageSize.A4);
 
-    @Schema(title = "Page orientation, for fixed page sizes")
+    @Schema(title = "Page orientation, for fixed page sizes", description = "Default `PORTRAIT`.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<Orientation> orientation = Property.ofValue(Orientation.PORTRAIT);
 
-    @Schema(title = "Margin around the image, in points (1/72 inch). Ignored for `IMAGE` page size")
+    @Schema(title = "Margin around the image, in points (1/72 inch)", description = "Ignored for the `IMAGE` page size. Default 0, at least 0.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<@Min(0) Float> margin = Property.ofValue(0f);
 
-    @Schema(title = "Maximum number of images, so one page each")
+    @Schema(title = "Maximum number of images, so one page each", description = "Default 500, between 1 and 10,000.")
+    @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<@Min(1) Integer> maxImages = Property.ofValue(500);
+    private Property<@Min(1) @Max(MAX_IMAGES) Integer> maxImages = Property.ofValue(500);
 
     @Schema(
         title = "Largest image accepted, in pixels (width times height)",
-        description = "Read from the image header before decoding, so an oversized image fails without exhausting the worker's memory. The default, 40 million pixels, fits an A4 page scanned at 600 DPI."
+        description = "Read from the image header before decoding, so an oversized image fails without exhausting the worker's memory. Default 40,000,000, which fits an A4 page scanned at 600 DPI; between 1 and 400,000,000."
     )
+    @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<@Min(1) Long> maxImagePixels = Property.ofValue(40_000_000L);
+    private Property<@Min(1) @Max(MAX_IMAGE_PIXELS) Long> maxImagePixels = Property.ofValue(40_000_000L);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        List<String> uris = runContext.render(images).asList(String.class);
-        if (uris.isEmpty()) {
+        var rImages = runContext.render(images).asList(String.class);
+        if (rImages.isEmpty()) {
             throw new IllegalArgumentException("At least one image is required.");
         }
-        PageSize size = runContext.render(pageSize).as(PageSize.class).orElse(PageSize.A4);
-        Orientation pageOrientation = runContext.render(orientation).as(Orientation.class).orElse(Orientation.PORTRAIT);
-        float pageMargin = runContext.render(margin).as(Float.class).orElse(0f);
-        if (pageMargin < 0) {
-            throw new IllegalArgumentException("`margin` must not be negative, got %s.".formatted(pageMargin));
+        var rPageSize = runContext.render(pageSize).as(PageSize.class).orElse(PageSize.A4);
+        var rOrientation = runContext.render(orientation).as(Orientation.class).orElse(Orientation.PORTRAIT);
+        float rMargin = runContext.render(margin).as(Float.class).orElse(0f);
+        if (rMargin < 0) {
+            throw new IllegalArgumentException("`margin` must not be negative, got %s.".formatted(rMargin));
         }
-        int imageLimit = positive(runContext, maxImages, 500, "maxImages");
-        if (uris.size() > imageLimit) {
+        int rMaxImages = boundedInt(runContext, maxImages, 500, MAX_IMAGES, "maxImages");
+        if (rImages.size() > rMaxImages) {
             throw new IllegalArgumentException(
-                "%d images is more than `maxImages` (%d); split the list or raise the limit.".formatted(uris.size(), imageLimit)
+                "%d images is more than `maxImages` (%d); split the list or raise the limit.".formatted(rImages.size(), rMaxImages)
             );
         }
-        long pixelLimit = runContext.render(maxImagePixels).as(Long.class).orElse(40_000_000L);
-        if (pixelLimit < 1) {
-            throw new IllegalArgumentException("`maxImagePixels` must be at least 1, got %d.".formatted(pixelLimit));
-        }
+        long rMaxImagePixels = boundedLong(runContext, maxImagePixels, 40_000_000L, MAX_IMAGE_PIXELS, "maxImagePixels");
 
         try (PDDocument document = new PDDocument()) {
-            for (String uri : uris) {
-                File file = download(runContext, uri, extensionOf(uri)).toFile();
-                checkPixels(file, uri, pixelLimit);
+            for (var uri : rImages) {
+                var file = download(runContext, uri, extensionOf(uri)).toFile();
+                checkPixels(file, uri, rMaxImagePixels);
                 PDImageXObject image;
                 try {
                     image = PDImageXObject.createFromFileByContent(file, document);
@@ -125,38 +128,38 @@ public class FromImages extends AbstractPdfboxTask implements RunnableTask<FromI
                     throw new IllegalArgumentException("'%s' is not a supported image: %s".formatted(uri, e.getMessage()), e);
                 }
 
-                PDRectangle box = size == PageSize.IMAGE
+                var box = rPageSize == PageSize.IMAGE
                     ? new PDRectangle(image.getWidth(), image.getHeight())
-                    : size.rectangle(pageOrientation);
-                PDPage page = new PDPage(box);
+                    : rPageSize.rectangle(rOrientation);
+                var page = new PDPage(box);
                 document.addPage(page);
 
-                float inset = size == PageSize.IMAGE ? 0 : pageMargin;
+                float inset = rPageSize == PageSize.IMAGE ? 0 : rMargin;
                 float maxWidth = box.getWidth() - 2 * inset;
                 float maxHeight = box.getHeight() - 2 * inset;
                 if (maxWidth <= 0 || maxHeight <= 0) {
-                    throw new IllegalArgumentException("`margin` %s leaves no room on the page.".formatted(pageMargin));
+                    throw new IllegalArgumentException("`margin` %s leaves no room on the page.".formatted(rMargin));
                 }
                 float scale = Math.min(maxWidth / image.getWidth(), maxHeight / image.getHeight());
                 float width = image.getWidth() * scale;
                 float height = image.getHeight() * scale;
-                try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                try (var content = new PDPageContentStream(document, page)) {
                     content.drawImage(image, (box.getWidth() - width) / 2, (box.getHeight() - height) / 2, width, height);
                 }
             }
-            URI result = save(runContext, document);
+            var result = save(runContext, document);
             return Output.builder().uri(result).pageCount(document.getNumberOfPages()).build();
         }
     }
 
-    /** Reads only the image header, so the size check happens before any pixel is decoded. */
+    // Reads only the image header, so the size check happens before any pixel is decoded.
     static void checkPixels(File file, String uri, long limit) throws Exception {
-        try (ImageInputStream in = ImageIO.createImageInputStream(file)) {
-            Iterator<ImageReader> readers = in == null ? null : ImageIO.getImageReaders(in);
+        try (var in = ImageIO.createImageInputStream(file)) {
+            var readers = in == null ? null : ImageIO.getImageReaders(in);
             if (readers == null || !readers.hasNext()) {
                 throw new IllegalArgumentException("'%s' is not a supported image (PNG, JPEG, GIF, BMP or TIFF).".formatted(uri));
             }
-            ImageReader reader = readers.next();
+            var reader = readers.next();
             try {
                 reader.setInput(in, true, true);
                 long pixels = (long) reader.getWidth(0) * reader.getHeight(0);

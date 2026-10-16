@@ -8,6 +8,7 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
@@ -17,7 +18,6 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @SuperBuilder
@@ -73,10 +73,11 @@ import java.util.regex.Pattern;
 )
 public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Output> {
     private static final Pattern RANGE = Pattern.compile("\\s*(\\d+)\\s*(?:-\\s*(\\d+)\\s*)?");
+    static final int MAX_PARTS = 100_000;
 
     @Schema(title = "The PDF to split, as an internal storage URI")
     @NotNull
-    @PluginProperty(internalStorageURI = true, group = "source")
+    @PluginProperty(internalStorageURI = true, group = "main")
     private Property<String> from;
 
     @Schema(
@@ -91,48 +92,51 @@ public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Outp
         title = "Page ranges to extract, one output PDF per entry",
         description = "Each entry is a single page (`3`) or an inclusive range (`3-7`), pages numbered from 1. Set either `ranges` or `everyNPages`."
     )
+    @PluginProperty(group = "processing")
     private Property<List<String>> ranges;
 
     @Schema(
         title = "Split into chunks of this many pages",
         description = "The last chunk holds the remaining pages. Set either `ranges` or `everyNPages`."
     )
+    @PluginProperty(group = "processing")
     private Property<@Min(1) Integer> everyNPages;
 
     @Schema(
         title = "Maximum number of parts to write",
-        description = "The task fails instead of writing more parts than this, so a very long document split page by page cannot fill the worker's storage."
+        description = "The task fails instead of writing more parts than this, so a very long document split page by page cannot fill the worker's storage. Default 1,000, between 1 and 100,000."
     )
+    @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<@Min(1) Integer> maxParts = Property.ofValue(1000);
+    private Property<@Min(1) @Max(MAX_PARTS) Integer> maxParts = Property.ofValue(1000);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        List<String> rangeList = runContext.render(ranges).asList(String.class);
-        Integer chunk = runContext.render(everyNPages).as(Integer.class).orElse(null);
-        if (rangeList.isEmpty() == (chunk == null)) {
+        var rRanges = runContext.render(ranges).asList(String.class);
+        Integer rEveryNPages = runContext.render(everyNPages).as(Integer.class).orElse(null);
+        if (rRanges.isEmpty() == (rEveryNPages == null)) {
             throw new IllegalArgumentException("Set exactly one of `ranges` or `everyNPages`.");
         }
-        if (chunk != null && chunk < 1) {
-            throw new IllegalArgumentException("`everyNPages` must be at least 1, got %d.".formatted(chunk));
+        if (rEveryNPages != null && rEveryNPages < 1) {
+            throw new IllegalArgumentException("`everyNPages` must be at least 1, got %d.".formatted(rEveryNPages));
         }
 
-        int partLimit = positive(runContext, maxParts, 1000, "maxParts");
+        int rMaxParts = boundedInt(runContext, maxParts, 1000, MAX_PARTS, "maxParts");
 
-        List<URI> uris = new ArrayList<>();
+        var uris = new ArrayList<URI>();
         try (PDDocument document = load(runContext, from, password)) {
             removeProtection(document, "Split");
             int pageCount = document.getNumberOfPages();
             if (pageCount == 0) {
                 throw new IllegalArgumentException("The PDF has no pages.");
             }
-            List<int[]> parts = chunk != null ? chunks(pageCount, chunk) : parse(rangeList, pageCount);
-            if (parts.size() > partLimit) {
+            var parts = rEveryNPages != null ? chunks(pageCount, rEveryNPages) : parse(rRanges, pageCount);
+            if (parts.size() > rMaxParts) {
                 throw new IllegalArgumentException(
-                    "Splitting would write %d parts, more than `maxParts` (%d); use bigger chunks or raise the limit.".formatted(parts.size(), partLimit)
+                    "Splitting would write %d parts, more than `maxParts` (%d); use bigger chunks or raise the limit.".formatted(parts.size(), rMaxParts)
                 );
             }
-            for (int[] part : parts) {
+            for (var part : parts) {
                 try (PDDocument output = new PDDocument()) {
                     for (int page = part[0]; page <= part[1]; page++) {
                         output.importPage(document.getPage(page - 1));
@@ -146,7 +150,7 @@ public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Outp
     }
 
     static List<int[]> chunks(int pageCount, int size) {
-        List<int[]> parts = new ArrayList<>();
+        var parts = new ArrayList<int[]>();
         for (int start = 1; start <= pageCount; start += size) {
             parts.add(new int[]{start, Math.min(start + size - 1, pageCount)});
         }
@@ -154,9 +158,9 @@ public class Split extends AbstractPdfboxTask implements RunnableTask<Split.Outp
     }
 
     static List<int[]> parse(List<String> ranges, int pageCount) {
-        List<int[]> parts = new ArrayList<>();
-        for (String range : ranges) {
-            Matcher matcher = RANGE.matcher(range);
+        var parts = new ArrayList<int[]>();
+        for (var range : ranges) {
+            var matcher = RANGE.matcher(range);
             if (!matcher.matches()) {
                 throw new IllegalArgumentException("Invalid page range '%s': use a page like `3` or a range like `3-7`.".formatted(range));
             }

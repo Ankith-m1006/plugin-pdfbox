@@ -19,9 +19,7 @@ import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
 import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
 import java.net.URI;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -59,10 +57,12 @@ import java.util.List;
 )
 public class Render extends AbstractPdfboxTask implements RunnableTask<Render.Output> {
     static final int MAX_DPI = 600;
+    static final int MAX_PAGES = 10_000;
+    static final long MAX_PAGE_PIXELS = 400_000_000L;
 
     @Schema(title = "The PDF to render, as an internal storage URI")
     @NotNull
-    @PluginProperty(internalStorageURI = true, group = "source")
+    @PluginProperty(internalStorageURI = true, group = "main")
     private Property<String> from;
 
     @Schema(title = "Password of an encrypted PDF")
@@ -70,72 +70,76 @@ public class Render extends AbstractPdfboxTask implements RunnableTask<Render.Ou
     @ToString.Exclude
     private Property<String> password;
 
-    @Schema(title = "First page to render, starting at 1")
+    @Schema(title = "First page to render, starting at 1", description = "Default 1.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<@Min(1) Integer> startPage = Property.ofValue(1);
 
-    @Schema(title = "Last page to render, inclusive. Defaults to the last page")
+    @Schema(title = "Last page to render, inclusive", description = "Defaults to the last page.")
+    @PluginProperty(group = "processing")
     private Property<@Min(1) Integer> endPage;
 
-    @Schema(title = "Resolution in dots per inch, between 36 and 600")
+    @Schema(title = "Resolution in dots per inch", description = "Default 150, between 36 and 600.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<@Min(36) @Max(MAX_DPI) Integer> dpi = Property.ofValue(150);
 
-    @Schema(title = "Image format")
+    @Schema(title = "Image format", description = "Default `PNG`.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<Format> format = Property.ofValue(Format.PNG);
 
-    @Schema(title = "Render the pages in grayscale instead of color")
+    @Schema(title = "Render the pages in grayscale instead of color", description = "Default `false`.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<Boolean> grayscale = Property.ofValue(false);
 
     @Schema(
         title = "Maximum number of pages to render",
-        description = "The task fails instead of rendering more pages than this, so a very long document cannot fill the worker's memory and storage."
+        description = "The task fails instead of rendering more pages than this, so a very long document cannot fill the worker's memory and storage. Default 100, between 1 and 10,000."
     )
+    @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<@Min(1) Integer> maxPages = Property.ofValue(100);
+    private Property<@Min(1) @Max(MAX_PAGES) Integer> maxPages = Property.ofValue(100);
 
     @Schema(
         title = "Largest page image to render, in pixels (width times height)",
-        description = "Checked from the page size and the DPI before rendering, so a page with a huge media box cannot exhaust the worker's memory. The default, 40 million pixels, fits an A4 page at 600 DPI."
+        description = "Checked from the page size and the DPI before rendering, so a page with a huge media box cannot exhaust the worker's memory. Default 40,000,000, which fits an A4 page at 600 DPI; between 1 and 400,000,000."
     )
+    @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<@Min(1) Long> maxPagePixels = Property.ofValue(40_000_000L);
+    private Property<@Min(1) @Max(MAX_PAGE_PIXELS) Long> maxPagePixels = Property.ofValue(40_000_000L);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        int resolution = runContext.render(dpi).as(Integer.class).orElse(150);
-        if (resolution < 36 || resolution > MAX_DPI) {
-            throw new IllegalArgumentException("`dpi` must be between 36 and %d, got %d.".formatted(MAX_DPI, resolution));
+        int rDpi = runContext.render(dpi).as(Integer.class).orElse(150);
+        if (rDpi < 36 || rDpi > MAX_DPI) {
+            throw new IllegalArgumentException("`dpi` must be between 36 and %d, got %d.".formatted(MAX_DPI, rDpi));
         }
-        Format imageFormat = runContext.render(format).as(Format.class).orElse(Format.PNG);
-        boolean gray = runContext.render(grayscale).as(Boolean.class).orElse(false);
-        int limit = positive(runContext, maxPages, 100, "maxPages");
-        long pixelLimit = runContext.render(maxPagePixels).as(Long.class).orElse(40_000_000L);
-        if (pixelLimit < 1) {
-            throw new IllegalArgumentException("`maxPagePixels` must be at least 1, got %d.".formatted(pixelLimit));
-        }
+        var rFormat = runContext.render(format).as(Format.class).orElse(Format.PNG);
+        boolean rGrayscale = runContext.render(grayscale).as(Boolean.class).orElse(false);
+        int rMaxPages = boundedInt(runContext, maxPages, 100, MAX_PAGES, "maxPages");
+        long rMaxPagePixels = boundedLong(runContext, maxPagePixels, 40_000_000L, MAX_PAGE_PIXELS, "maxPagePixels");
 
-        List<URI> uris = new ArrayList<>();
+        var uris = new ArrayList<URI>();
         try (PDDocument document = load(runContext, from, password)) {
-            int[] range = pageRange(runContext, startPage, endPage, document.getNumberOfPages());
-            checkPageLimit(range[1] - range[0] + 1, limit, "Rendering");
+            var range = pageRange(runContext, startPage, endPage, document.getNumberOfPages());
+            checkPageLimit(range[1] - range[0] + 1, rMaxPages, "Rendering");
 
-            PDFRenderer renderer = new PDFRenderer(document);
-            ImageType type = gray ? ImageType.GRAY : (imageFormat == Format.JPEG ? ImageType.RGB : ImageType.ARGB);
+            var renderer = new PDFRenderer(document);
+            var type = rGrayscale ? ImageType.GRAY : (rFormat == Format.JPEG ? ImageType.RGB : ImageType.ARGB);
             for (int page = range[0]; page <= range[1]; page++) {
-                checkPixels(document.getPage(page - 1).getCropBox(), resolution, pixelLimit, page);
-                BufferedImage image = renderer.renderImageWithDPI(page - 1, resolution, type);
-                Path file = runContext.workingDir().createTempFile(imageFormat.extension);
-                if (!ImageIO.write(image, imageFormat.writer, file.toFile())) {
-                    throw new IllegalStateException("No image writer is available for " + imageFormat);
+                checkPixels(document.getPage(page - 1).getCropBox(), rDpi, rMaxPagePixels, page);
+                var image = renderer.renderImageWithDPI(page - 1, rDpi, type);
+                var file = runContext.workingDir().createTempFile(rFormat.extension);
+                if (!ImageIO.write(image, rFormat.writer, file.toFile())) {
+                    throw new IllegalStateException("No image writer is available for " + rFormat);
                 }
                 image.flush();
                 uris.add(runContext.storage().putFile(file.toFile()));
             }
         }
-        runContext.logger().info("Rendered {} page(s) at {} DPI.", uris.size(), resolution);
+        runContext.logger().info("Rendered {} page(s) at {} DPI.", uris.size(), rDpi);
         return Output.builder().uris(uris).count(uris.size()).build();
     }
 

@@ -1,17 +1,15 @@
 package io.kestra.plugin.pdfbox.text;
 
-import java.nio.file.Path;
-import java.nio.file.Files;
-import java.nio.charset.StandardCharsets;
-import java.net.URI;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
 import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
+import io.kestra.core.models.tasks.common.FetchType;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
@@ -19,6 +17,9 @@ import lombok.experimental.SuperBuilder;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -57,7 +58,7 @@ import java.util.List;
                 """
         ),
         @Example(
-            title = "Extract text page by page from an encrypted PDF",
+            title = "Extract text page by page from an encrypted PDF and store it in internal storage",
             full = true,
             code = """
                 id: pdf_extract_pages
@@ -73,14 +74,17 @@ import java.util.List;
                     from: "{{ inputs.file }}"
                     password: "{{ secret('PDF_PASSWORD') }}"
                     perPage: true
+                    fetchType: STORE
                 """
         )
     }
 )
 public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.Output> {
+    static final int MAX_PAGES = 100_000;
+
     @Schema(title = "The PDF to read, as an internal storage URI")
     @NotNull
-    @PluginProperty(internalStorageURI = true, group = "source")
+    @PluginProperty(internalStorageURI = true, group = "main")
     private Property<String> from;
 
     @Schema(title = "Password of an encrypted PDF")
@@ -88,56 +92,73 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
     @ToString.Exclude
     private Property<String> password;
 
-    @Schema(title = "First page to read, starting at 1")
+    @Schema(title = "First page to read, starting at 1", description = "Default 1.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<@Min(1) Integer> startPage = Property.ofValue(1);
 
-    @Schema(title = "Last page to read, inclusive. Defaults to the last page")
+    @Schema(title = "Last page to read, inclusive", description = "Defaults to the last page.")
+    @PluginProperty(group = "processing")
     private Property<@Min(1) Integer> endPage;
 
     @Schema(
         title = "Also return the text of each page separately",
-        description = "When true, `pages` holds one entry per page in the range, in order."
+        description = "When true, `pages` (or `pageUris` with `fetchType: STORE`) holds one entry per page in the range, in order. Default `false`."
     )
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<Boolean> perPage = Property.ofValue(false);
 
     @Schema(
         title = "Sort text by its position on the page",
-        description = "Helps with multi-column layouts and PDFs whose text is written out of reading order."
+        description = "Helps with multi-column layouts and PDFs whose text is written out of reading order. Default `false`."
     )
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<Boolean> sortByPosition = Property.ofValue(false);
 
     @Schema(
-        title = "Write the text to internal storage instead of the task output",
-        description = "Task outputs are limited in size, so use this for long documents: `uri` then points to a UTF-8 text file and `text` is empty. With `perPage`, each page is also written to its own file, listed in `pageUris`."
+        title = "How to return the text",
+        description = "`FETCH` (default) returns it in `text` and `pages`. `STORE` writes UTF-8 text files to internal storage and returns `uri` and `pageUris`; use it for long documents, since task outputs are limited in size. `NONE` returns only `pageCount`. `FETCH_ONE` is not supported."
     )
+    @PluginProperty(group = "destination")
     @Builder.Default
-    private Property<Boolean> store = Property.ofValue(false);
+    private Property<FetchType> fetchType = Property.ofValue(FetchType.FETCH);
 
     @Schema(
         title = "Maximum number of pages to read",
-        description = "The task fails instead of reading more pages than this; narrow the page range for longer documents."
+        description = "The task fails instead of reading more pages than this; narrow the page range for longer documents. Default 1,000, between 1 and 100,000."
     )
+    @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<@Min(1) Integer> maxPages = Property.ofValue(1000);
+    private Property<@Min(1) @Max(MAX_PAGES) Integer> maxPages = Property.ofValue(1000);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
+        var rFetchType = runContext.render(fetchType).as(FetchType.class).orElse(FetchType.FETCH);
+        if (rFetchType == FetchType.FETCH_ONE) {
+            throw new IllegalArgumentException("`fetchType: FETCH_ONE` is not supported; use `FETCH`, `STORE` or `NONE`.");
+        }
+        int rMaxPages = boundedInt(runContext, maxPages, 1000, MAX_PAGES, "maxPages");
+        boolean rSortByPosition = runContext.render(sortByPosition).as(Boolean.class).orElse(false);
+        boolean rPerPage = runContext.render(perPage).as(Boolean.class).orElse(false);
+
         try (PDDocument document = load(runContext, from, password)) {
             int pageCount = document.getNumberOfPages();
-            int[] range = pageRange(runContext, startPage, endPage, pageCount);
-            checkPageLimit(range[1] - range[0] + 1, positive(runContext, maxPages, 1000, "maxPages"), "Reading");
+            var range = pageRange(runContext, startPage, endPage, pageCount);
+            checkPageLimit(range[1] - range[0] + 1, rMaxPages, "Reading");
+            if (rFetchType == FetchType.NONE) {
+                return Output.builder().pageCount(pageCount).build();
+            }
 
-            PDFTextStripper stripper = new PDFTextStripper();
-            stripper.setSortByPosition(runContext.render(sortByPosition).as(Boolean.class).orElse(false));
+            var stripper = new PDFTextStripper();
+            stripper.setSortByPosition(rSortByPosition);
             stripper.setStartPage(range[0]);
             stripper.setEndPage(range[1]);
-            String text = stripper.getText(document);
+            var text = stripper.getText(document);
 
             List<String> pages = null;
-            if (runContext.render(perPage).as(Boolean.class).orElse(false)) {
+            if (rPerPage) {
                 pages = new ArrayList<>();
                 for (int page = range[0]; page <= range[1]; page++) {
                     stripper.setStartPage(page);
@@ -147,11 +168,11 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
             }
 
             runContext.logger().debug("Extracted {} characters from pages {}-{} of {}.", text.length(), range[0], range[1], pageCount);
-            if (runContext.render(store).as(Boolean.class).orElse(false)) {
+            if (rFetchType == FetchType.STORE) {
                 List<URI> pageUris = null;
                 if (pages != null) {
                     pageUris = new ArrayList<>();
-                    for (String page : pages) {
+                    for (var page : pages) {
                         pageUris.add(storeText(runContext, page));
                     }
                 }
@@ -162,7 +183,7 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
     }
 
     private static URI storeText(RunContext runContext, String text) throws Exception {
-        Path file = runContext.workingDir().createTempFile(".txt");
+        var file = runContext.workingDir().createTempFile(".txt");
         Files.writeString(file, text, StandardCharsets.UTF_8);
         return runContext.storage().putFile(file.toFile());
     }
@@ -170,16 +191,16 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
     @Builder
     @Getter
     public static class Output implements io.kestra.core.models.tasks.Output {
-        @Schema(title = "Text of the selected pages")
+        @Schema(title = "Text of the selected pages, with `fetchType: FETCH`")
         private final String text;
 
-        @Schema(title = "Internal storage URI of the text file, when `store` is true")
+        @Schema(title = "Internal storage URI of the text file, with `fetchType: STORE`")
         private final URI uri;
 
-        @Schema(title = "Text of each selected page, when `perPage` is true and `store` is false")
+        @Schema(title = "Text of each selected page, when `perPage` is true and `fetchType` is `FETCH`")
         private final List<String> pages;
 
-        @Schema(title = "Internal storage URIs of each page's text file, when `perPage` and `store` are true")
+        @Schema(title = "Internal storage URIs of each page's text file, when `perPage` is true and `fetchType` is `STORE`")
         private final List<URI> pageUris;
 
         @Schema(title = "Total number of pages in the document")

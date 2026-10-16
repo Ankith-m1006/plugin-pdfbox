@@ -55,7 +55,7 @@ import java.net.URI;
 public class Encrypt extends AbstractPdfboxTask implements RunnableTask<Encrypt.Output> {
     @Schema(title = "The PDF to encrypt, as an internal storage URI")
     @NotNull
-    @PluginProperty(internalStorageURI = true, group = "source")
+    @PluginProperty(internalStorageURI = true, group = "main")
     private Property<String> from;
 
     @Schema(
@@ -72,40 +72,48 @@ public class Encrypt extends AbstractPdfboxTask implements RunnableTask<Encrypt.
     @ToString.Exclude
     private Property<String> ownerPassword;
 
-    @Schema(title = "Encryption key length in bits")
+    @Schema(title = "Encryption key length in bits", description = "Default `AES_256`.")
+    @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<KeyLength> keyLength = Property.ofValue(KeyLength.AES_256);
 
-    @Schema(title = "Allow printing")
+    @Schema(title = "Allow printing", description = "Default `true`.")
+    @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<Boolean> canPrint = Property.ofValue(true);
 
-    @Schema(title = "Allow modifying the content")
+    @Schema(title = "Allow modifying the content", description = "Default `false`.")
+    @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<Boolean> canModify = Property.ofValue(false);
 
-    @Schema(title = "Allow copying or extracting text and images")
+    @Schema(title = "Allow copying or extracting text and images", description = "Default `true`.")
+    @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<Boolean> canCopy = Property.ofValue(true);
 
-    @Schema(title = "Allow adding or changing annotations")
+    @Schema(title = "Allow adding or changing annotations", description = "Default `false`.")
+    @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<Boolean> canAnnotate = Property.ofValue(false);
 
-    @Schema(title = "Allow filling in form fields")
+    @Schema(title = "Allow filling in form fields", description = "Default `true`.")
+    @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<Boolean> canFillForms = Property.ofValue(true);
 
-    @Schema(title = "Allow inserting, rotating or deleting pages")
+    @Schema(title = "Allow inserting, rotating or deleting pages", description = "Default `false`.")
+    @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<Boolean> canAssemble = Property.ofValue(false);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        String owner = required(runContext, ownerPassword, "ownerPassword");
-        String user = runContext.render(userPassword).as(String.class).orElse("");
+        var rOwnerPassword = required(runContext, ownerPassword, "ownerPassword");
+        var rUserPassword = runContext.render(userPassword).as(String.class).orElse("");
+        var rKeyLength = runContext.render(keyLength).as(KeyLength.class).orElse(KeyLength.AES_256);
 
-        AccessPermission permission = new AccessPermission();
+        var permission = new AccessPermission();
         permission.setCanPrint(runContext.render(canPrint).as(Boolean.class).orElse(true));
         permission.setCanModify(runContext.render(canModify).as(Boolean.class).orElse(false));
         permission.setCanExtractContent(runContext.render(canCopy).as(Boolean.class).orElse(true));
@@ -113,8 +121,8 @@ public class Encrypt extends AbstractPdfboxTask implements RunnableTask<Encrypt.
         permission.setCanFillInForm(runContext.render(canFillForms).as(Boolean.class).orElse(true));
         permission.setCanAssembleDocument(runContext.render(canAssemble).as(Boolean.class).orElse(false));
 
-        StandardProtectionPolicy policy = new StandardProtectionPolicy(owner, user, permission);
-        policy.setEncryptionKeyLength(runContext.render(keyLength).as(KeyLength.class).orElse(KeyLength.AES_256).bits);
+        var policy = new StandardProtectionPolicy(rOwnerPassword, rUserPassword, permission);
+        policy.setEncryptionKeyLength(rKeyLength.bits);
 
         try (PDDocument document = load(runContext, from, Property.ofValue(""))) {
             if (document.isEncrypted()) {

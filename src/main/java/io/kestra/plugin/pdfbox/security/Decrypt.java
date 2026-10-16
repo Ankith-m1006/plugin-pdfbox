@@ -53,7 +53,7 @@ import java.net.URI;
 public class Decrypt extends AbstractPdfboxTask implements RunnableTask<Decrypt.Output> {
     @Schema(title = "The encrypted PDF, as an internal storage URI")
     @NotNull
-    @PluginProperty(internalStorageURI = true, group = "source")
+    @PluginProperty(internalStorageURI = true, group = "main")
     private Property<String> from;
 
     @Schema(
@@ -61,7 +61,7 @@ public class Decrypt extends AbstractPdfboxTask implements RunnableTask<Decrypt.
         description = "The owner password is needed to remove the protection of a file that restricts permissions without a user password."
     )
     @NotNull
-    @PluginProperty(secret = true, group = "source")
+    @PluginProperty(secret = true, group = "main")
     @ToString.Exclude
     private Property<String> password;
 

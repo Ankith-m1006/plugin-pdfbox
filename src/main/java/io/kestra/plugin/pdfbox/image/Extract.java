@@ -8,22 +8,19 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDResources;
-import org.apache.pdfbox.pdmodel.graphics.PDXObject;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 
 import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
 import java.net.URI;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -64,9 +61,12 @@ import java.util.Set;
     }
 )
 public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.Output> {
+    static final int MAX_IMAGES = 10_000;
+    static final long MAX_IMAGE_PIXELS = 400_000_000L;
+
     @Schema(title = "The PDF to read, as an internal storage URI")
     @NotNull
-    @PluginProperty(internalStorageURI = true, group = "source")
+    @PluginProperty(internalStorageURI = true, group = "main")
     private Property<String> from;
 
     @Schema(title = "Password of an encrypted PDF")
@@ -74,43 +74,47 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
     @ToString.Exclude
     private Property<String> password;
 
-    @Schema(title = "First page to read, starting at 1")
+    @Schema(title = "First page to read, starting at 1", description = "Default 1.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<@Min(1) Integer> startPage = Property.ofValue(1);
 
-    @Schema(title = "Last page to read, inclusive. Defaults to the last page")
+    @Schema(title = "Last page to read, inclusive", description = "Defaults to the last page.")
+    @PluginProperty(group = "processing")
     private Property<@Min(1) Integer> endPage;
 
-    @Schema(title = "Maximum number of images to extract before failing")
+    @Schema(
+        title = "Maximum number of images to extract before failing",
+        description = "Default 500, between 1 and 10,000."
+    )
+    @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<@Min(1) Integer> maxImages = Property.ofValue(500);
+    private Property<@Min(1) @Max(MAX_IMAGES) Integer> maxImages = Property.ofValue(500);
 
     @Schema(
         title = "Largest image to extract, in pixels (width times height)",
-        description = "Bigger images are skipped with a warning. The default, 40 million pixels, fits an A4 page scanned at 600 DPI."
+        description = "Bigger images are skipped with a warning. Default 40,000,000, which fits an A4 page scanned at 600 DPI; between 1 and 400,000,000."
     )
+    @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<@Min(1) Long> maxImagePixels = Property.ofValue(40_000_000L);
+    private Property<@Min(1) @Max(MAX_IMAGE_PIXELS) Long> maxImagePixels = Property.ofValue(40_000_000L);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        int imageLimit = positive(runContext, maxImages, 500, "maxImages");
-        long pixelLimit = runContext.render(maxImagePixels).as(Long.class).orElse(40_000_000L);
-        if (pixelLimit < 1) {
-            throw new IllegalArgumentException("`maxImagePixels` must be at least 1, got %d.".formatted(pixelLimit));
-        }
+        int rMaxImages = boundedInt(runContext, maxImages, 500, MAX_IMAGES, "maxImages");
+        long rMaxImagePixels = boundedLong(runContext, maxImagePixels, 40_000_000L, MAX_IMAGE_PIXELS, "maxImagePixels");
 
-        List<URI> uris = new ArrayList<>();
+        var uris = new ArrayList<URI>();
         try (PDDocument document = load(runContext, from, password)) {
-            int[] range = pageRange(runContext, startPage, endPage, document.getNumberOfPages());
-            Set<Object> seen = new HashSet<>();
+            var range = pageRange(runContext, startPage, endPage, document.getNumberOfPages());
+            var seen = new HashSet<Object>();
             int skipped = 0;
             for (int page = range[0]; page <= range[1]; page++) {
-                PDPage pdPage = document.getPage(page - 1);
-                skipped += collect(runContext, pdPage.getResources(), seen, uris, imageLimit, pixelLimit, 0);
+                var pdPage = document.getPage(page - 1);
+                skipped += collect(runContext, pdPage.getResources(), seen, uris, rMaxImages, rMaxImagePixels, 0);
             }
             if (skipped > 0) {
-                runContext.logger().warn("Skipped {} image(s) larger than {} pixels.", skipped, pixelLimit);
+                runContext.logger().warn("Skipped {} image(s) larger than {} pixels.", skipped, rMaxImagePixels);
             }
         }
         runContext.logger().info("Extracted {} image(s).", uris.size());
@@ -124,7 +128,7 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
         }
         int skipped = 0;
         for (COSName name : resources.getXObjectNames()) {
-            PDXObject xObject = resources.getXObject(name);
+            var xObject = resources.getXObject(name);
             if (xObject == null || !seen.add(xObject.getCOSObject())) {
                 continue;
             }
@@ -140,8 +144,8 @@ public class Extract extends AbstractPdfboxTask implements RunnableTask<Extract.
                         "The PDF holds more than `maxImages` (%d) images; narrow the page range or raise the limit.".formatted(imageLimit)
                     );
                 }
-                BufferedImage buffered = image.getImage();
-                Path file = runContext.workingDir().createTempFile(".png");
+                var buffered = image.getImage();
+                var file = runContext.workingDir().createTempFile(".png");
                 boolean written = ImageIO.write(buffered, "png", file.toFile());
                 buffered.flush();
                 if (!written) {

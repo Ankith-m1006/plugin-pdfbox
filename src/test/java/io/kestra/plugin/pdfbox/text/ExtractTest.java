@@ -3,6 +3,7 @@ package io.kestra.plugin.pdfbox.text;
 import java.nio.charset.StandardCharsets;
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.property.Property;
+import io.kestra.core.models.tasks.common.FetchType;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.core.storages.StorageInterface;
@@ -59,13 +60,13 @@ class ExtractTest {
     }
 
     @Test
-    void shouldWriteTheTextToStorageWhenStoreIsSet() throws Exception {
+    void shouldWriteTheTextToStorageWithFetchTypeStore() throws Exception {
         URI pdf = Fixtures.put(storage, Fixtures.textPdf("long report"), ".pdf");
         RunContext runContext = runContext();
 
         Extract.Output output = Extract.builder()
             .from(Property.ofValue(pdf.toString()))
-            .store(Property.ofValue(true))
+            .fetchType(Property.ofValue(FetchType.STORE))
             .build()
             .run(runContext);
 
@@ -73,6 +74,33 @@ class ExtractTest {
         try (var in = runContext.storage().getFile(output.getUri())) {
             assertThat(new String(in.readAllBytes(), StandardCharsets.UTF_8), containsString("long report"));
         }
+    }
+
+    @Test
+    void shouldReturnOnlyThePageCountWithFetchTypeNone() throws Exception {
+        URI pdf = Fixtures.put(storage, Fixtures.textPdf("a", "b", "c"), ".pdf");
+
+        Extract.Output output = Extract.builder()
+            .from(Property.ofValue(pdf.toString()))
+            .fetchType(Property.ofValue(FetchType.NONE))
+            .build()
+            .run(runContext());
+
+        assertThat(output.getPageCount(), is(3));
+        assertThat(output.getText(), nullValue());
+        assertThat(output.getUri(), nullValue());
+    }
+
+    @Test
+    void shouldRefuseFetchTypeFetchOne() throws Exception {
+        URI pdf = Fixtures.put(storage, Fixtures.textPdf("a"), ".pdf");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> Extract.builder()
+            .from(Property.ofValue(pdf.toString()))
+            .fetchType(Property.ofValue(FetchType.FETCH_ONE))
+            .build()
+            .run(runContext()));
+        assertThat(error.getMessage(), containsString("FETCH_ONE"));
     }
 
     @Test

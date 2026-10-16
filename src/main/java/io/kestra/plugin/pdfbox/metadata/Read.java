@@ -12,7 +12,6 @@ import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 
 import java.time.Instant;
 import java.util.Calendar;
@@ -56,7 +55,7 @@ import java.util.TreeMap;
 public class Read extends AbstractPdfboxTask implements RunnableTask<Read.Output> {
     @Schema(title = "The PDF to read, as an internal storage URI")
     @NotNull
-    @PluginProperty(internalStorageURI = true, group = "source")
+    @PluginProperty(internalStorageURI = true, group = "main")
     private Property<String> from;
 
     @Schema(title = "Password of an encrypted PDF")
@@ -67,11 +66,11 @@ public class Read extends AbstractPdfboxTask implements RunnableTask<Read.Output
     @Override
     public Output run(RunContext runContext) throws Exception {
         try (PDDocument document = load(runContext, from, password)) {
-            PDDocumentInformation info = document.getDocumentInformation();
-            Map<String, String> custom = new TreeMap<>();
-            for (String key : info.getMetadataKeys()) {
+            var info = document.getDocumentInformation();
+            var custom = new TreeMap<String, String>();
+            for (var key : info.getMetadataKeys()) {
                 if (!Update.STANDARD_KEYS.contains(key)) {
-                    String value = info.getCustomMetadataValue(key);
+                    var value = info.getCustomMetadataValue(key);
                     if (value != null) {
                         custom.put(key, value);
                     }
@@ -88,7 +87,7 @@ public class Read extends AbstractPdfboxTask implements RunnableTask<Read.Output
                 .modificationDate(toInstant(info.getModificationDate()))
                 .custom(custom)
                 .pageCount(document.getNumberOfPages())
-                .version(document.getVersion())
+                .pdfVersion(document.getVersion())
                 .encrypted(document.isEncrypted())
                 .build();
         }
@@ -132,7 +131,7 @@ public class Read extends AbstractPdfboxTask implements RunnableTask<Read.Output
         private final Integer pageCount;
 
         @Schema(title = "PDF version, for example 1.7")
-        private final Float version;
+        private final Float pdfVersion;
 
         @Schema(title = "Whether the PDF is encrypted")
         private final Boolean encrypted;

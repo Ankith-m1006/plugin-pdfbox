@@ -112,7 +112,7 @@ public final class Fixtures {
         }
     }
 
-    /** One blank page of the given size in points; a big one stands in for a hostile media box. */
+    // One blank page of the given size in points; a big one stands in for a hostile media box.
     public static byte[] pagePdf(float width, float height) throws Exception {
         try (PDDocument document = new PDDocument()) {
             document.addPage(new PDPage(new PDRectangle(width, height)));
@@ -120,7 +120,7 @@ public final class Fixtures {
         }
     }
 
-    /** The form of {@link #formPdf()} with an XFA packet, like the hybrid forms Acrobat produces. */
+    // The form of formPdf() with an XFA packet, like the hybrid forms Acrobat produces.
     public static byte[] hybridFormPdf() throws Exception {
         try (PDDocument document = Loader.loadPDF(formPdf())) {
             COSStream xfa = document.getDocument().createCOSStream();

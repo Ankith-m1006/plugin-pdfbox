@@ -59,7 +59,7 @@ import java.util.Map;
 public class Fill extends AbstractPdfboxTask implements RunnableTask<Fill.Output> {
     @Schema(title = "The PDF form, as an internal storage URI")
     @NotNull
-    @PluginProperty(internalStorageURI = true, group = "source")
+    @PluginProperty(internalStorageURI = true, group = "main")
     private Property<String> from;
 
     @Schema(
@@ -72,38 +72,41 @@ public class Fill extends AbstractPdfboxTask implements RunnableTask<Fill.Output
 
     @Schema(title = "Field values, keyed by fully qualified field name")
     @NotNull
+    @PluginProperty(group = "main")
     private Property<Map<String, String>> fields;
 
-    @Schema(title = "Flatten the form after filling so the values become static page content")
+    @Schema(title = "Flatten the form after filling so the values become static page content", description = "Default `false`.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<Boolean> flatten = Property.ofValue(false);
 
-    @Schema(title = "Skip field names that do not exist in the form instead of failing")
+    @Schema(title = "Skip field names that do not exist in the form instead of failing", description = "Default `false`.")
+    @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<Boolean> ignoreUnknownFields = Property.ofValue(false);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        Map<String, String> values = runContext.render(fields).asMap(String.class, String.class);
-        boolean ignoreUnknown = runContext.render(ignoreUnknownFields).as(Boolean.class).orElse(false);
+        var rFields = runContext.render(fields).asMap(String.class, String.class);
+        boolean rIgnoreUnknownFields = runContext.render(ignoreUnknownFields).as(Boolean.class).orElse(false);
+        boolean rFlatten = runContext.render(flatten).as(Boolean.class).orElse(false);
 
         try (PDDocument document = load(runContext, from, password)) {
             requireOwnerPermission(document, "form.Fill");
-            PDAcroForm form = document.getDocumentCatalog().getAcroForm();
+            var form = document.getDocumentCatalog().getAcroForm();
             if (form == null) {
                 throw new IllegalArgumentException("The PDF has no form fields to fill.");
             }
             if (form.hasXFA()) {
-                // Hybrid forms carry an XFA copy of the values that Acrobat prefers over the AcroForm fields.
-                // Dropping it makes every reader show the values filled here.
+                // Hybrid forms keep an XFA copy of the values that Acrobat prefers; dropping it shows the AcroForm values everywhere.
                 form.setXFA(null);
                 runContext.logger().info("Removed the XFA layer of the hybrid form so readers show the filled AcroForm values.");
             }
 
-            List<String> unknown = new ArrayList<>();
+            var unknown = new ArrayList<String>();
             int filled = 0;
-            for (Map.Entry<String, String> entry : values.entrySet()) {
-                PDField field = form.getField(entry.getKey());
+            for (var entry : rFields.entrySet()) {
+                var field = form.getField(entry.getKey());
                 if (field == null) {
                     unknown.add(entry.getKey());
                     continue;
@@ -111,7 +114,7 @@ public class Fill extends AbstractPdfboxTask implements RunnableTask<Fill.Output
                 setValue(field, entry.getValue());
                 filled++;
             }
-            if (!unknown.isEmpty() && !ignoreUnknown) {
+            if (!unknown.isEmpty() && !rIgnoreUnknownFields) {
                 throw new IllegalArgumentException(
                     "Unknown form fields %s. Available fields: %s.".formatted(unknown, fieldNames(form))
                 );
@@ -120,7 +123,7 @@ public class Fill extends AbstractPdfboxTask implements RunnableTask<Fill.Output
                 runContext.logger().warn("Skipped unknown form fields {}.", unknown);
             }
 
-            if (runContext.render(flatten).as(Boolean.class).orElse(false)) {
+            if (rFlatten) {
                 form.flatten();
             }
             return Output.builder().uri(saveKeepingProtection(runContext, document)).filledFields(filled).build();

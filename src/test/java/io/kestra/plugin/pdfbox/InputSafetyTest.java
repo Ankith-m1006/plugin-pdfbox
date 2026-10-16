@@ -2,6 +2,7 @@ package io.kestra.plugin.pdfbox;
 
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.property.Property;
+import io.kestra.core.models.tasks.common.FetchType;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.core.storages.StorageInterface;
@@ -31,9 +32,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/**
- * Encrypted, corrupt, empty and oversized inputs across the tasks, as asked for in the review of the first version.
- */
+// Encrypted, corrupt, empty and oversized inputs across the tasks, as asked for in the review of the first version.
 @KestraTest
 class InputSafetyTest {
     @Inject
@@ -316,7 +315,7 @@ class InputSafetyTest {
         Extract.Output output = Extract.builder()
             .from(Property.ofValue(pdf.toString()))
             .perPage(Property.ofValue(true))
-            .store(Property.ofValue(true))
+            .fetchType(Property.ofValue(FetchType.STORE))
             .build()
             .run(runContext);
 

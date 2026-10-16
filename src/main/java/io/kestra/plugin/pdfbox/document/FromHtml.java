@@ -16,13 +16,15 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.pdfbox.AbstractPdfboxTask;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.slf4j.Logger;
 import org.xml.sax.SAXException;
+
+import javax.xml.transform.TransformerException;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -33,7 +35,6 @@ import java.io.Reader;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Locale;
 
 @SuperBuilder
@@ -123,10 +124,13 @@ import java.util.Locale;
     }
 )
 public class FromHtml extends AbstractPdfboxTask implements RunnableTask<FromHtml.Output> {
-    @Schema(title = "XHTML to render. Set either `html` or `from`")
+    static final long MAX_RESOURCE_BYTES = 1024L * 1024 * 1024;
+
+    @Schema(title = "XHTML to render", description = "Set either `html` or `from`.")
+    @PluginProperty(group = "source")
     private Property<String> html;
 
-    @Schema(title = "An XHTML file to render, as an internal storage URI. Set either `html` or `from`")
+    @Schema(title = "An XHTML file to render, as an internal storage URI", description = "Set either `html` or `from`.")
     @PluginProperty(internalStorageURI = true, group = "source")
     private Property<String> from;
 
@@ -134,68 +138,71 @@ public class FromHtml extends AbstractPdfboxTask implements RunnableTask<FromHtm
         title = "Base URI for relative links in the HTML",
         description = "Usually an internal storage URI; relative `src` and `href` values are resolved against it. Defaults to `from` when that is set."
     )
+    @PluginProperty(group = "source")
     private Property<String> baseUri;
 
-    @Schema(title = "Default page size, used when the CSS does not set one")
+    @Schema(title = "Default page size, used when the CSS does not set one", description = "Default `A4`.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<FromImages.PageSize> pageSize = Property.ofValue(FromImages.PageSize.A4);
 
-    @Schema(title = "Default page orientation")
+    @Schema(title = "Default page orientation", description = "Default `PORTRAIT`.")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<FromImages.Orientation> orientation = Property.ofValue(FromImages.Orientation.PORTRAIT);
 
     @Schema(
         title = "Allow loading remote `http` and `https` resources",
-        description = "Off by default to avoid server-side request forgery when the HTML is not fully trusted. When on, remote resources are fetched with Kestra's HTTP client."
+        description = "Off by default to avoid server-side request forgery when the HTML is not fully trusted. When on, remote resources are fetched with Kestra's HTTP client. Default `false`."
     )
+    @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<Boolean> allowRemoteResources = Property.ofValue(false);
 
     @Schema(
         title = "Largest HTML file or resource to load, in bytes",
-        description = "Applies to the `from` file and to every image, stylesheet or font, from internal storage or the network."
+        description = "Applies to the `from` file and to every image, stylesheet or font, from internal storage or the network. Default 20 MiB (20,971,520), between 1 and 1 GiB (1,073,741,824)."
     )
+    @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<@Min(1) Long> maxResourceBytes = Property.ofValue(20L * 1024 * 1024);
+    private Property<@Min(1) @Max(MAX_RESOURCE_BYTES) Long> maxResourceBytes = Property.ofValue(20L * 1024 * 1024);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        String inline = runContext.render(html).as(String.class).orElse(null);
-        String fromUri = runContext.render(from).as(String.class).orElse(null);
-        if ((inline == null) == (fromUri == null)) {
+        var rHtml = runContext.render(html).as(String.class).orElse(null);
+        var rFrom = runContext.render(from).as(String.class).orElse(null);
+        if ((rHtml == null) == (rFrom == null)) {
             throw new IllegalArgumentException("Set exactly one of `html` or `from`.");
         }
-        long sizeLimit = runContext.render(maxResourceBytes).as(Long.class).orElse(20L * 1024 * 1024);
-        if (sizeLimit < 1) {
-            throw new IllegalArgumentException("`maxResourceBytes` must be at least 1, got %d.".formatted(sizeLimit));
-        }
-        String content = inline;
+        long rMaxResourceBytes = boundedLong(runContext, maxResourceBytes, 20L * 1024 * 1024, MAX_RESOURCE_BYTES, "maxResourceBytes");
+        var content = rHtml;
         if (content == null) {
-            try (InputStream in = runContext.storage().getFile(URI.create(fromUri))) {
-                content = new String(readLimited(in, sizeLimit, fromUri), StandardCharsets.UTF_8);
+            try (var in = runContext.storage().getFile(URI.create(rFrom))) {
+                content = new String(readLimited(in, rMaxResourceBytes, rFrom), StandardCharsets.UTF_8);
             }
         }
-        String base = runContext.render(baseUri).as(String.class).orElse(fromUri);
-        boolean remote = runContext.render(allowRemoteResources).as(Boolean.class).orElse(false);
-        Logger logger = runContext.logger();
+        var rBaseUri = runContext.render(baseUri).as(String.class).orElse(rFrom);
+        boolean rAllowRemoteResources = runContext.render(allowRemoteResources).as(Boolean.class).orElse(false);
+        var logger = runContext.logger();
 
-        FromImages.PageSize size = runContext.render(pageSize).as(FromImages.PageSize.class).orElse(FromImages.PageSize.A4);
-        if (size == FromImages.PageSize.IMAGE) {
+        var rPageSize = runContext.render(pageSize).as(FromImages.PageSize.class).orElse(FromImages.PageSize.A4);
+        if (rPageSize == FromImages.PageSize.IMAGE) {
             throw new IllegalArgumentException("`IMAGE` page size only applies to `document.FromImages`.");
         }
-        PDRectangle page = size.rectangle(runContext.render(orientation).as(FromImages.Orientation.class).orElse(FromImages.Orientation.PORTRAIT));
+        var rOrientation = runContext.render(orientation).as(FromImages.Orientation.class).orElse(FromImages.Orientation.PORTRAIT);
+        var page = rPageSize.rectangle(rOrientation);
 
-        Path target = runContext.workingDir().createTempFile(".pdf");
-        try (OutputStream out = Files.newOutputStream(target); HttpClient client = remote ? httpClient(runContext, sizeLimit) : null) {
-            PdfRendererBuilder builder = new PdfRendererBuilder();
+        var target = runContext.workingDir().createTempFile(".pdf");
+        try (var out = Files.newOutputStream(target); var client = rAllowRemoteResources ? httpClient(runContext, rMaxResourceBytes) : null) {
+            var builder = new PdfRendererBuilder();
             builder.useFastMode();
-            builder.withHtmlContent(content, base);
+            builder.withHtmlContent(content, rBaseUri);
             builder.useDefaultPageSize(toMillimeters(page.getWidth()), toMillimeters(page.getHeight()), BaseRendererBuilder.PageSizeUnits.MM);
             builder.useUriResolver(FromHtml::resolve);
-            builder.useExternalResourceAccessControl((uri, type) -> isAllowed(uri, remote), ExternalResourceControlPriority.RUN_AFTER_RESOLVING_URI);
-            builder.useProtocolsStreamImplementation(new StorageStreamFactory(runContext, sizeLimit, logger), "kestra");
+            builder.useExternalResourceAccessControl((uri, type) -> isAllowed(uri, rAllowRemoteResources), ExternalResourceControlPriority.RUN_AFTER_RESOLVING_URI);
+            builder.useProtocolsStreamImplementation(new StorageStreamFactory(runContext, rMaxResourceBytes, logger), "kestra");
             if (client != null) {
-                builder.useHttpStreamImplementation(new KestraHttpStreamFactory(client, sizeLimit, logger));
+                builder.useHttpStreamImplementation(new KestraHttpStreamFactory(client, rMaxResourceBytes, logger));
             }
             builder.toStream(out);
             try {
@@ -214,7 +221,7 @@ public class FromHtml extends AbstractPdfboxTask implements RunnableTask<FromHtm
         try (PDDocument document = load(target.toFile(), "", "rendered HTML")) {
             pageCount = document.getNumberOfPages();
         }
-        URI uri = runContext.storage().putFile(target.toFile());
+        var uri = runContext.storage().putFile(target.toFile());
         return Output.builder().uri(uri).pageCount(pageCount).build();
     }
 
@@ -227,7 +234,7 @@ public class FromHtml extends AbstractPdfboxTask implements RunnableTask<FromHtm
 
     static boolean isParseError(Throwable error) {
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-            if (cause instanceof SAXException || cause instanceof javax.xml.transform.TransformerException) {
+            if (cause instanceof SAXException || cause instanceof TransformerException) {
                 return true;
             }
         }

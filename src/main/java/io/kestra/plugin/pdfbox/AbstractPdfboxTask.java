@@ -16,7 +16,6 @@ import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,8 +29,8 @@ import java.nio.file.StandardCopyOption;
 public abstract class AbstractPdfboxTask extends Task {
 
     protected static Path download(RunContext runContext, String uri, String extension) throws Exception {
-        Path file = runContext.workingDir().createTempFile(extension);
-        try (InputStream in = runContext.storage().getFile(URI.create(uri))) {
+        var file = runContext.workingDir().createTempFile(extension);
+        try (var in = runContext.storage().getFile(URI.create(uri))) {
             Files.copy(in, file, StandardCopyOption.REPLACE_EXISTING);
         }
         return file;
@@ -44,9 +43,9 @@ public abstract class AbstractPdfboxTask extends Task {
     }
 
     protected static PDDocument load(RunContext runContext, Property<String> from, Property<String> password) throws Exception {
-        String uri = required(runContext, from, "from");
-        String renderedPassword = runContext.render(password).as(String.class).orElse("");
-        return load(download(runContext, uri, ".pdf").toFile(), renderedPassword, uri);
+        var rFrom = required(runContext, from, "from");
+        var rPassword = runContext.render(password).as(String.class).orElse("");
+        return load(download(runContext, rFrom, ".pdf").toFile(), rPassword, rFrom);
     }
 
     protected static PDDocument load(File file, String password, String source) throws IOException {
@@ -61,19 +60,12 @@ public abstract class AbstractPdfboxTask extends Task {
         }
     }
 
-    /**
-     * Tasks that change an encrypted PDF, like {@code metadata.Update} and {@code form.Fill}, need its owner password:
-     * the user password alone must not lift the restrictions set by the owner. Opened with the owner password,
-     * PDFBox encrypts the saved copy again with the same protection.
-     */
+    // Changing an encrypted PDF (metadata.Update, form.Fill) needs the owner password; the saved copy keeps its protection.
     protected static void requireOwnerPermission(PDDocument document, String task) {
         requireOwnerPermission(document, task, "changes the PDF");
     }
 
-    /**
-     * Tasks that write an unencrypted copy, like {@code document.Split}, also need the owner password;
-     * the copy is then marked to be saved without its encryption.
-     */
+    // Writing an unencrypted copy (document.Split) also needs the owner password, then the copy is saved without encryption.
     protected static void removeProtection(PDDocument document, String task) {
         requireOwnerPermission(document, task, "writes an unencrypted copy");
         if (document.isEncrypted()) {
@@ -92,22 +84,18 @@ public abstract class AbstractPdfboxTask extends Task {
     }
 
     protected static URI save(RunContext runContext, PDDocument document) throws Exception {
-        Path file = runContext.workingDir().createTempFile(".pdf");
+        var file = runContext.workingDir().createTempFile(".pdf");
         document.save(file.toFile());
         return runContext.storage().putFile(file.toFile());
     }
 
-    /**
-     * Saves a changed copy that keeps the protection of an encrypted input. PDFBox refuses a full save of an
-     * encrypted document unless its security is removed or replaced, so the changes are appended as an incremental
-     * update, which reuses the original encryption dictionary and keys. Unencrypted documents are saved normally.
-     */
+    // PDFBox refuses a full save of an encrypted document, so changes are appended as an incremental update that reuses its encryption.
     protected static URI saveKeepingProtection(RunContext runContext, PDDocument document) throws Exception {
         if (!document.isEncrypted()) {
             return save(runContext, document);
         }
-        Path file = runContext.workingDir().createTempFile(".pdf");
-        try (OutputStream out = Files.newOutputStream(file)) {
+        var file = runContext.workingDir().createTempFile(".pdf");
+        try (var out = Files.newOutputStream(file)) {
             document.saveIncremental(out);
         }
         return runContext.storage().putFile(file.toFile());
@@ -117,20 +105,20 @@ public abstract class AbstractPdfboxTask extends Task {
         if (pageCount == 0) {
             throw new IllegalArgumentException("The PDF has no pages.");
         }
-        int start = runContext.render(startPage).as(Integer.class).orElse(1);
-        int end = runContext.render(endPage).as(Integer.class).orElse(pageCount);
-        if (start < 1) {
-            throw new IllegalArgumentException("`startPage` must be at least 1, got %d.".formatted(start));
+        int rStartPage = runContext.render(startPage).as(Integer.class).orElse(1);
+        int rEndPage = runContext.render(endPage).as(Integer.class).orElse(pageCount);
+        if (rStartPage < 1) {
+            throw new IllegalArgumentException("`startPage` must be at least 1, got %d.".formatted(rStartPage));
         }
-        if (start > pageCount) {
+        if (rStartPage > pageCount) {
             throw new IllegalArgumentException(
-                "`startPage` %d is past the last page: the PDF has %d page(s).".formatted(start, pageCount)
+                "`startPage` %d is past the last page: the PDF has %d page(s).".formatted(rStartPage, pageCount)
             );
         }
-        if (end < start) {
-            throw new IllegalArgumentException("`endPage` %d is before `startPage` %d.".formatted(end, start));
+        if (rEndPage < rStartPage) {
+            throw new IllegalArgumentException("`endPage` %d is before `startPage` %d.".formatted(rEndPage, rStartPage));
         }
-        return new int[]{start, Math.min(end, pageCount)};
+        return new int[]{rStartPage, Math.min(rEndPage, pageCount)};
     }
 
     protected static int checkPageLimit(int pages, int limit, String what) {
@@ -142,17 +130,26 @@ public abstract class AbstractPdfboxTask extends Task {
         return pages;
     }
 
-    protected static int positive(RunContext runContext, Property<Integer> property, int fallback, String name) throws Exception {
-        int value = runContext.render(property).as(Integer.class).orElse(fallback);
-        if (value < 1) {
-            throw new IllegalArgumentException("`%s` must be at least 1, got %d.".formatted(name, value));
+    // Rendered values are checked again at run time, because `@Min` and `@Max` only see values written literally in the flow.
+    protected static int boundedInt(RunContext runContext, Property<Integer> property, int fallback, int max, String name) throws Exception {
+        int rValue = runContext.render(property).as(Integer.class).orElse(fallback);
+        if (rValue < 1 || rValue > max) {
+            throw new IllegalArgumentException("`%s` must be between 1 and %d, got %d.".formatted(name, max, rValue));
         }
-        return value;
+        return rValue;
     }
 
-    /** Reads at most {@code limit} bytes, failing instead of loading a larger stream into memory. */
+    protected static long boundedLong(RunContext runContext, Property<Long> property, long fallback, long max, String name) throws Exception {
+        long rValue = runContext.render(property).as(Long.class).orElse(fallback);
+        if (rValue < 1 || rValue > max) {
+            throw new IllegalArgumentException("`%s` must be between 1 and %d, got %d.".formatted(name, max, rValue));
+        }
+        return rValue;
+    }
+
+    // Reads at most `limit` bytes, failing instead of loading a larger stream into memory.
     protected static byte[] readLimited(InputStream in, long limit, String source) throws IOException {
-        byte[] bytes = in.readNBytes((int) Math.min(limit + 1, Integer.MAX_VALUE - 8));
+        var bytes = in.readNBytes((int) Math.min(limit + 1, Integer.MAX_VALUE - 8));
         if (bytes.length > limit) {
             throw new IOException("'%s' is larger than %d bytes.".formatted(source, limit));
         }
